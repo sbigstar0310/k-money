@@ -55,11 +55,27 @@ function fakeBlob(name, content) {
   };
 }
 
+/**
+ * 가짜 Drive 폴더.
+ *
+ * ⚠️ **이름을 열쇠로 쓰는 Map 이 아니라 배열이다.** 드라이브는 같은 이름의
+ *    파일을 막지 않는다 — 같은 이름으로 두 번 만들면 덮이지 않고 **두 개가
+ *    된다** (실측). Map 으로 두면 그 제약이 사라져서, 메모리 정리가 풀려는
+ *    문제 자체가 테스트 안에서는 일어나지 않는다.
+ */
 function fakeFolder(name) {
-  const files = new Map();
+  const files = [];
   const folders = new Map();
+  const iter = (arr) => {
+    let i = 0;
+    return { hasNext: () => i < arr.length, next: () => arr[i++] };
+  };
   const self = {
-    _files: files,
+    // 들여다보기용. 이름이 겹치면 겹친 만큼 다 센다.
+    _names: () => files.map((f) => f.getName()),
+    _has: (n) => files.some((f) => f.getName() === n),
+    _get: (n) => files.filter((f) => f.getName() === n)[0],
+    _count: () => files.length,
     getId: () => 'id-' + name,
     getFoldersByName(n) {
       const f = folders.get(n);
@@ -67,25 +83,23 @@ function fakeFolder(name) {
       return { hasNext: () => !done, next: () => { done = true; return f; } };
     },
     createFolder(n) { const f = fakeFolder(n); folders.set(n, f); return f; },
-    getFilesByName(n) {
-      const f = files.get(n);
-      let done = !f;
-      return { hasNext: () => !done, next: () => { done = true; return f; } };
-    },
-    getFiles() {
-      const all = [...files.values()];
-      let i = 0;
-      return { hasNext: () => i < all.length, next: () => all[i++] };
-    },
+    getFilesByName(n) { return iter(files.filter((f) => f.getName() === n)); },
+    getFiles() { return iter(files.slice()); },
     createFile(blob) {
       let content = blob.getDataAsString ? blob.getDataAsString() : '';
       const file = {
         getName: () => blob.getName(),
         getBlob: () => ({ getDataAsString: () => content }),
+        // 테스트가 필요하면 덮어쓴다. 기본값이 같으므로 동점 처리도 지난다.
+        getDateCreated: () => new Date(0),
         setContent(c) { content = c; return this; },
-        setTrashed() { files.delete(blob.getName()); return this; },
+        setTrashed() {
+          const i = files.indexOf(file);
+          if (i >= 0) files.splice(i, 1);
+          return this;
+        },
       };
-      files.set(blob.getName(), file);
+      files.push(file);
       return file;
     },
   };
@@ -300,11 +314,11 @@ test('pruneFacts — 델타에 쓸 만큼만 남기고 오래된 것부터 지�
   }
   A.putJson(folder, A.CFG.latestName, '{}');
   A.pruneFacts(folder);
-  const names = [...folder._files.keys()].filter((n) => A.CFG.historyPattern.test(n));
+  const names = folder._names().filter((n) => A.CFG.historyPattern.test(n));
   assert.equal(names.length, A.CFG.keepFacts);
   // ⚠️ 최신본은 지난 기록과 접두사가 같다. 날짜 모양까지 안 보면 최신본을
   //    히스토리로 세서 지운다.
-  assert.ok(folder._files.has(A.CFG.latestName), '최신본을 지우면 안 된다');
+  assert.ok(folder._has(A.CFG.latestName), '최신본을 지우면 안 된다');
   assert.ok(!names.includes(A.historyName('2026-01-01')), '오래된 것이 남아 있다');
 });
 
@@ -322,7 +336,7 @@ test('putJson — 같은 이름이면 덮어쓰고 늘어나지 않는다', () =
   const folder = fakeFolder('f');
   A.putJson(folder, 'x.json', '{"a":1}');
   A.putJson(folder, 'x.json', '{"a":2}');
-  assert.equal(folder._files.size, 1);
+  assert.equal(folder._count(), 1);
   assert.equal(A.readJson(folder, 'x.json').a, 2);
 });
 
@@ -385,16 +399,16 @@ test('process — 끝까지 돌면 최신본과 원본 zip 이 남는다', () =>
   assert.equal(r.step, 'done');
 
   const folder = env._root.getFoldersByName(A.CFG.folderName).next();
-  assert.ok(folder._files.has(A.CFG.latestName), A.CFG.latestName + ' 이 없다');
+  assert.ok(folder._has(A.CFG.latestName), A.CFG.latestName + ' 이 없다');
   // ⚠️ 히스토리 이름은 **받은 날**(6/11)이다. 데이터 날짜로 지으면 매일
   //    거래하지 않는 사람은 파일이 한 개만 남고 delta 가 영영 안 나온다.
-  assert.ok(folder._files.has(A.historyName('2026-06-11')),
-    '히스토리 이름이 받은 날이 아니다: ' + [...folder._files.keys()].join(', '));
+  assert.ok(folder._has(A.historyName('2026-06-11')),
+    '히스토리 이름이 받은 날이 아니다: ' + folder._names().join(', '));
   const raw = folder.getFoldersByName('raw').next();
   // 원본 zip 은 메일 받은 날로 남긴다 — 언제 받은 파일인지가 여기선 중요하다.
-  assert.ok(raw._files.has('2026-06-11.zip'), '원본 zip 을 안 남겼다');
+  assert.ok(raw._has('2026-06-11.zip'), '원본 zip 을 안 남겼다');
 
-  const facts = JSON.parse(folder._files.get(A.CFG.latestName).getBlob().getDataAsString());
+  const facts = JSON.parse(folder._get(A.CFG.latestName).getBlob().getDataAsString());
   assert.ok(facts.period, 'period 가 없다');
 
   // ⚠️ 메일 수신일(6/11)이 아니라 거래 마지막 날(6/10)이어야 한다.
@@ -421,9 +435,9 @@ test('process — 두 번 돌려도 같은 날 파일이 늘어나지 않는다'
     },
   });
   A.process(env, { force: true });
-  const after1 = env._root.getFoldersByName(A.CFG.folderName).next()._files.size;
+  const after1 = env._root.getFoldersByName(A.CFG.folderName).next()._count();
   A.process(env, { force: true });
-  const after2 = env._root.getFoldersByName(A.CFG.folderName).next()._files.size;
+  const after2 = env._root.getFoldersByName(A.CFG.folderName).next()._count();
   assert.equal(after2, after1, '같은 날인데 파일이 늘었다');
 });
 
@@ -487,10 +501,10 @@ test('매일 거래하지 않아도 스냅샷이 쌓이고 delta 가 나온다',
   run('2026-06-03', 10000000);
   run('2026-06-04', 10800000);
   const folder = env._root.getFoldersByName(A.CFG.folderName).next();
-  const history = [...folder._files.keys()].filter((n) => A.CFG.historyPattern.test(n));
+  const history = folder._names().filter((n) => A.CFG.historyPattern.test(n));
   assert.equal(history.length, 2, '스냅샷이 안 쌓인다: ' + history.join(', '));
 
-  const latest = JSON.parse(folder._files.get(A.CFG.latestName).getBlob().getDataAsString());
+  const latest = JSON.parse(folder._get(A.CFG.latestName).getBlob().getDataAsString());
   assert.ok(latest.delta, 'delta 가 안 나왔다');
   assert.equal(latest.delta.netWorth, 800000);
 });
@@ -537,7 +551,7 @@ test('runDaily — 예외가 나도 상태를 남기고 던진다', () => {
   assert.throws(() => A.runDaily(env), /Gmail 폭발/);
   // 무인 실행이라 예외를 삼키면 아무도 모른다. Drive 에는 남아야 한다.
   const folder = env._root.getFoldersByName(A.CFG.folderName).next();
-  const status = JSON.parse(folder._files.get(A.CFG.statusName).getBlob().getDataAsString());
+  const status = JSON.parse(folder._get(A.CFG.statusName).getBlob().getDataAsString());
   assert.equal(status.ok, false);
   assert.match(status.message, /Gmail 폭발/);
 });
@@ -616,10 +630,10 @@ test('AGENT.md 는 내용이 같으면 다시 쓰지 않는다', () => {
   const A = loadApp();
   const folder = fakeFolder('돈동생');
   A.ensureAgentGuide(folder);
-  const first = folder._files.get('AGENT.md');
+  const first = folder._get('AGENT.md');
   A.ensureAgentGuide(folder);
-  assert.strictEqual(folder._files.get('AGENT.md'), first, '매번 새로 쓰고 있다');
-  assert.equal(folder._files.size, 1);
+  assert.strictEqual(folder._get('AGENT.md'), first, '매번 새로 쓰고 있다');
+  assert.equal(folder._count(), 1);
 });
 
 test('AGENT.md 가 낡았으면 갱신한다', () => {
@@ -627,7 +641,7 @@ test('AGENT.md 가 낡았으면 갱신한다', () => {
   const folder = fakeFolder('돈동생');
   A.putJson(folder, 'AGENT.md', '옛날 내용');
   A.ensureAgentGuide(folder);
-  assert.equal(folder._files.get('AGENT.md').getBlob().getDataAsString(), A.AGENT_GUIDE);
+  assert.equal(folder._get('AGENT.md').getBlob().getDataAsString(), A.AGENT_GUIDE);
 });
 
 test('AGENT.md 가 쓰기 규칙과 경계를 담는다', () => {
@@ -678,9 +692,9 @@ test('pruneMemory — 주제마다 최신 하나만 남긴다', () => {
   const r = A.pruneMemory(root);
   assert.equal(r.topics, 2);
   assert.equal(r.trashed, 1);
-  assert.ok(!mem._files.has('2026-08-01-목표.md'), '옛 것이 남아 있다');
-  assert.ok(mem._files.has('2026-08-09-목표.md'), '최신을 지웠다');
-  assert.ok(mem._files.has('2026-08-05-수입.md'), '다른 주제를 건드렸다');
+  assert.ok(!mem._has('2026-08-01-목표.md'), '옛 것이 남아 있다');
+  assert.ok(mem._has('2026-08-09-목표.md'), '최신을 지웠다');
+  assert.ok(mem._has('2026-08-05-수입.md'), '다른 주제를 건드렸다');
 });
 
 test('pruneMemory — 순서는 파일 이름이 아니라 생성 시각으로 본다', () => {
@@ -697,8 +711,8 @@ test('pruneMemory — 순서는 파일 이름이 아니라 생성 시각으로 �
   put('2026-08-01-목표.md', '2026-08-20');
 
   A.pruneMemory(root);
-  assert.ok(mem._files.has('2026-08-01-목표.md'), '이름만 보고 지웠다');
-  assert.ok(!mem._files.has('2026-08-20-목표.md'));
+  assert.ok(mem._has('2026-08-01-목표.md'), '이름만 보고 지웠다');
+  assert.ok(!mem._has('2026-08-20-목표.md'));
 });
 
 test('pruneMemory — 규칙에 안 맞는 파일은 손대지 않는다', () => {
@@ -709,7 +723,168 @@ test('pruneMemory — 규칙에 안 맞는 파일은 손대지 않는다', () =>
   mem.createFile(fakeBlob('사진.png', 'x'));
   const r = A.pruneMemory(root);
   assert.equal(r.trashed, 0);
-  assert.equal(mem._files.size, 2, '유저 파일을 지웠다');
+  assert.equal(r.unnamed, 2, '유저 파일이 몇 개인지 안 세고 있다');
+  assert.equal(r.files, 0);
+  assert.equal(mem._count(), 2, '유저 파일을 지웠다');
+});
+
+// ── 메모리: 이름이 열쇠라서 생기는 것들 ──────────────────────────────
+
+/** 메모리 폴더에 파일을 놓는 도우미. t 를 주면 생성 시각까지. */
+function memoryWith(A, names) {
+  const root = fakeFolder('돈동생');
+  const mem = root.createFolder(A.CFG.memoryFolder);
+  names.forEach((n) => {
+    const [name, t] = Array.isArray(n) ? n : [n, null];
+    const f = mem.createFile(fakeBlob(name, 'x'));
+    if (t) f.getDateCreated = () => new Date(t);
+  });
+  return { root: root, mem: mem };
+}
+
+test('pruneMemory — 주제가 constructor 여도 죽지 않는다', () => {
+  // ⚠️ 평범한 {} 는 'constructor' 를 이미 갖고 있다. 배열을 안 만들고 함수에
+  //    .push 를 불러 TypeError 가 나고, 그 예외가 writeStatus 를 타고 올라가
+  //    **매일 아침 실행 전체를 죽인다.** 파일 하나로 도구가 멎는다.
+  //
+  //    'toString' 으로는 이걸 못 잡는다 — topicKey 가 소문자로 접어서
+  //    'tostring' 이 되고, 그건 프로토타입에 없다. 원래 소문자인 이름이라야
+  //    실제로 부딪힌다.
+  const A = loadApp();
+  const { root, mem } = memoryWith(A, [
+    ['2026-08-01-constructor.md', '2026-08-01'],
+    ['2026-08-09-constructor.md', '2026-08-09'],
+  ]);
+  const r = A.pruneMemory(root);       // 던지면 여기서 끝난다
+  assert.equal(r.trashed, 1);
+  assert.ok(mem._has('2026-08-09-constructor.md'));
+});
+
+test('pruneMemory — 주제가 __proto__ 여도 조용히 새지 않는다', () => {
+  // {} 에서는 대입이 프로토타입을 갈아 끼워서 Object.keys 에 안 잡힌다.
+  // 죽지는 않지만 그 주제만 영영 안 치워진다 — 더 찾기 어려운 쪽이다.
+  const A = loadApp();
+  const { root, mem } = memoryWith(A, [
+    ['2026-08-01-__proto__.md', '2026-08-01'],
+    ['2026-08-09-__proto__.md', '2026-08-09'],
+  ]);
+  const r = A.pruneMemory(root);
+  assert.equal(r.topics, 1, '주제로 세지 못했다');
+  assert.equal(r.trashed, 1, '옛 것이 남았다');
+  assert.ok(mem._has('2026-08-09-__proto__.md'));
+});
+
+test('topicKey — 눈에 같은 주제는 같은 열쇠가 나온다', () => {
+  const A = loadApp();
+  // macOS 가 만든 이름은 자모가 풀려서 온다. 눈으로는 구분이 안 된다.
+  const nfd = '목표'.normalize('NFD');
+  assert.notEqual(nfd, '목표', '이 환경에서는 NFD 가 안 만들어진다 — 테스트가 무의미하다');
+  assert.equal(A.topicKey(nfd), A.topicKey('목표'));
+  assert.equal(A.topicKey('고정 지출'), A.topicKey('고정지출'));
+  assert.equal(A.topicKey('Goal'), A.topicKey('goal'));
+  // 서로 다른 주제까지 뭉개면 안 된다.
+  assert.notEqual(A.topicKey('목표'), A.topicKey('수입'));
+});
+
+test('pruneMemory — 자모가 풀린 이름도 같은 주제로 묶는다', () => {
+  const A = loadApp();
+  const { root, mem } = memoryWith(A, [
+    ['2026-08-01-' + '목표'.normalize('NFD') + '.md', '2026-08-01'],
+    ['2026-08-09-목표.md', '2026-08-09'],
+  ]);
+  const r = A.pruneMemory(root);
+  assert.equal(r.topics, 1, '같은 주제를 둘로 봤다 — AI 가 모순되는 파일 둘을 읽는다');
+  assert.equal(r.trashed, 1);
+  assert.ok(mem._has('2026-08-09-목표.md'));
+});
+
+test('pruneMemory — 이름이 똑같은 파일이 둘이어도 하나만 남는다', () => {
+  // ⚠️ 드라이브는 같은 이름을 막지 않는다. AI 가 하루에 같은 주제를 두 번
+  //    쓰면 이름이 글자 하나까지 같은 파일이 **두 개** 생긴다.
+  const A = loadApp();
+  const { root, mem } = memoryWith(A, [
+    ['2026-08-09-목표.md', '2026-08-09T01:00:00Z'],
+    ['2026-08-09-목표.md', '2026-08-09T09:00:00Z'],
+  ]);
+  assert.equal(mem._count(), 2, '가짜 드라이브가 이름으로 덮어썼다 — 제약이 사라졌다');
+  const r = A.pruneMemory(root);
+  assert.equal(r.trashed, 1);
+  assert.equal(mem._count(), 1);
+});
+
+test('pruneMemory — 생성 시각이 같으면 이름이 큰 쪽을 남긴다', () => {
+  // 한 턴에 두 개를 쓰면 초까지 같을 수 있다. 안 정해 두면 어느 쪽이
+  // 살아남을지 실행마다 달라진다.
+  const A = loadApp();
+  const { root, mem } = memoryWith(A, [
+    ['2026-08-09-목표.md', '2026-08-09T00:00:00Z'],
+    ['2026-08-10-목표.md', '2026-08-09T00:00:00Z'],
+  ]);
+  const r = A.pruneMemory(root);
+  assert.equal(r.trashed, 1);
+  assert.ok(mem._has('2026-08-10-목표.md'), '동점에서 옛 날짜를 남겼다');
+});
+
+test('pruneMemory — 한 번에 지우는 개수에 상한이 있다', () => {
+  // 묶기가 잘못돼 전부 한 주제로 뭉치는 날이 와도 피해가 여기서 멈춘다.
+  const A = loadApp();
+  const n = A.CFG.memoryTrashBudget + 5;
+  const names = [];
+  for (let i = 0; i < n; i++) {
+    names.push(['2026-08-09-1' + String(i).padStart(3, '0') + '-목표.md', '2026-08-09']);
+  }
+  const { root, mem } = memoryWith(A, names);
+  const r = A.pruneMemory(root);
+  assert.equal(r.trashed, A.CFG.memoryTrashBudget, '상한을 넘겨 지웠다');
+  assert.equal(r.trashCapped, true, '잘렸다고 알리지 않았다');
+  assert.equal(mem._count(), n - A.CFG.memoryTrashBudget);
+});
+
+test('pruneMemory — getDateCreated 를 파일마다 한 번만 묻는다', () => {
+  // 드라이브 호출이다. 비교 함수 안에서 부르면 정렬 내내 다시 묻는다.
+  const A = loadApp();
+  const root = fakeFolder('돈동생');
+  const mem = root.createFolder(A.CFG.memoryFolder);
+  let calls = 0;
+  for (let i = 1; i <= 8; i++) {
+    const f = mem.createFile(fakeBlob('2026-08-0' + i + '-목표.md', 'x'));
+    f.getDateCreated = () => { calls++; return new Date('2026-08-0' + i); };
+  }
+  A.pruneMemory(root);
+  assert.equal(calls, 8, '파일당 한 번을 넘었다 (' + calls + '회)');
+});
+
+test('markMemorySeen — 처음 본 날을 남기고, 그 전까지는 never 로 답한다', () => {
+  const A = loadApp();
+  const props = propsStub({});
+  // 비어 있으면 아직 못 본 것이다 — 기록도 남기지 않는다.
+  assert.equal(A.markMemorySeen(props, 0, '2026-08-09T00:00:00Z'), false);
+  assert.equal(props.getProperty('MEMORY_FIRST_SEEN'), null);
+  // 한 번 보면 날짜만 남긴다.
+  assert.equal(A.markMemorySeen(props, 3, '2026-08-09T00:00:00Z'), true);
+  assert.equal(props.getProperty('MEMORY_FIRST_SEEN'), '2026-08-09');
+  // 그 뒤에 다 지워져도 '한 번도 없었다' 로 돌아가지 않는다.
+  assert.equal(A.markMemorySeen(props, 0, '2026-09-01T00:00:00Z'), true);
+  assert.equal(props.getProperty('MEMORY_FIRST_SEEN'), '2026-08-09', '처음 본 날이 밀렸다');
+});
+
+test('writeStatus — 메모리를 한 번도 못 봤으면 상태에 적는다', () => {
+  // "왜 기억을 못 해?" 를 받았을 때, 커넥터가 읽기 전용인지 그냥 안 쓴
+  // 건지를 가를 유일한 자리다.
+  const A = loadApp();
+  const env = fakeEnv({});
+  A.writeStatus(env, { ok: true, message: '처리할 새 메일이 없어요.' });
+  const folder = env._root.getFoldersByName(A.CFG.folderName).next();
+  const status = () => JSON.parse(folder._get(A.CFG.statusName).getBlob().getDataAsString());
+  assert.equal(status().memoryNeverUsed, true);
+  assert.equal(status().memory.files, 0);
+
+  // AI 가 한 번 쓰고 나면 사라진다.
+  const mem = folder.getFoldersByName(A.CFG.memoryFolder).next();
+  mem.createFile(fakeBlob('2026-08-09-목표.md', 'x'));
+  A.writeStatus(env, { ok: true, message: '처리 완료' });
+  assert.equal(status().memoryNeverUsed, undefined, '이미 봤는데 아직 never 라고 한다');
+  assert.equal(status().memory.files, 1);
 });
 
 test('pruneMemory — 메모리 폴더가 없으면 조용히 넘어간다', () => {

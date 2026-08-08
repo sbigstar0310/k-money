@@ -43,7 +43,14 @@ var KMApp = (function () {
     statusName: '돈동생-상태.json',
     agentName: 'AGENT.md',
     memoryFolder: '메모리',
-    memoryMax: 40,        // 주제가 이보다 많으면 시트에 알린다
+    // 주제가 이보다 많으면 상태 파일에 memoryOverflow 로 적는다. 시트에는
+    // 안 띄운다 — 굵은 칸 두 개는 '데이터가 멈췄다' 와 실행 결과의 자리고,
+    // 주제가 좀 많은 건 그 둘을 밀어낼 만한 소식이 아니다.
+    memoryMax: 40,
+    // 한 번에 휴지통으로 보낼 수 있는 최대 개수. **이 도구가 유저 것을 지우는
+    // 유일한 자리라서** 상한을 둔다. 묶기가 잘못돼 전부 한 주제로 뭉치는 날이
+    // 와도 피해가 여기서 멈추고, 다음 실행에서 이어 지운다.
+    memoryTrashBudget: 200,
     // 지난 기록은 '돈동생-YYYY-MM-DD.json'. 최신본과 접두사가 같으므로
     // 날짜 모양까지 봐야 한다 — 안 그러면 최신본을 히스토리로 세서 지운다.
     historyPattern: /^돈동생-\d{4}-\d{2}-\d{2}\.json$/,
@@ -61,6 +68,9 @@ var KMApp = (function () {
     passwordHint: 'BANKSALAD_ZIP_PASSWORD_HINT',
     // 값은 **거래의 마지막 날**이다 (메일 수신일이 아니다). dataAge_ 참고.
     lastIngest: 'LAST_INGEST_DATE',
+    // 메모리 파일을 **한 번이라도** 본 날. 상태 파일은 매일 덮이므로
+    // "지금 비어 있다" 와 "여태 한 번도 없었다" 를 여기 아니면 못 가른다.
+    memorySeen: 'MEMORY_FIRST_SEEN',
   };
 
   var STATUS_CELL = 'B10';
@@ -575,6 +585,19 @@ var KMApp = (function () {
   }
 
   /**
+   * 묶는 열쇠. **사람 눈에 같은 주제면 같은 열쇠가 나와야 한다.**
+   *
+   * ⚠️ **한글은 같은 글자가 두 가지 바이트로 온다.** macOS 가 만든 파일 이름은
+   *    자모가 풀린 NFD('ㄱㅗㅁㅍㅛ')로 오고 AI 가 쓴 건 NFC('목표')로 온다.
+   *    눈으로는 똑같은데 문자열로는 다르다 — 묶지 않으면 둘 다 살아남아
+   *    다음 대화에서 AI 가 **서로 모순되는 파일 두 개**를 읽는다.
+   *    그건 우리가 이 폴더를 만든 이유의 정반대다.
+   */
+  function topicKey(topic) {
+    return String(topic).normalize('NFC').replace(/\s+/g, '').toLowerCase();
+  }
+
+  /**
    * 주제마다 최신 하나만 남긴다.
    *
    * ⚠️ **순서는 파일 이름이 아니라 드라이브 생성 시각으로 본다.** AI 가 붙인
@@ -589,25 +612,51 @@ var KMApp = (function () {
     if (!it.hasNext()) return null;
     var mem = it.next();
 
-    var byTopic = {};
+    // ⚠️ **{} 가 아니라 Object.create(null).** 평범한 객체는 'toString' ·
+    //    'constructor' 를 이미 갖고 있다. 파일 하나가 '2026-08-09-toString.md'
+    //    이면 `!byTopic[topic]` 이 거짓이라 배열을 안 만들고, 곧바로
+    //    함수에 .push 를 불러 **TypeError 로 실행 전체가 죽는다.**
+    //    '__proto__' 는 더 조용하다 — 대입이 프로토타입을 갈아 끼워서
+    //    Object.keys 에 안 잡히고 그 주제만 영영 안 치워진다.
+    var byTopic = Object.create(null);
+    var matched = 0;
+    var unnamed = 0;
+
     var files = mem.getFiles();
     while (files.hasNext()) {
       var f = files.next();
-      var topic = memoTopic(f.getName());
-      if (!topic) continue;
-      if (!byTopic[topic]) byTopic[topic] = [];
-      byTopic[topic].push(f);
+      var name = f.getName();
+      var topic = memoTopic(name);
+      if (!topic) { unnamed++; continue; }
+      matched++;
+      var key = topicKey(topic);
+      if (!byTopic[key]) byTopic[key] = [];
+      // getDateCreated() 는 드라이브 호출이다. 비교 함수 안에서 부르면
+      // 파일 하나를 정렬 내내 몇 번씩 다시 묻는다. 여기서 한 번만 본다.
+      byTopic[key].push({ file: f, at: f.getDateCreated().getTime(), name: name });
     }
 
-    var topics = Object.keys(byTopic);
+    var keys = Object.keys(byTopic);
     var trashed = 0;
-    topics.forEach(function (t) {
-      var list = byTopic[t].sort(function (a, b) {
-        return b.getDateCreated().getTime() - a.getDateCreated().getTime();
+    var capped = false;
+    for (var k = 0; k < keys.length; k++) {
+      var list = byTopic[keys[k]].sort(function (a, b) {
+        // 같은 초에 만들어진 두 개는 이름이 큰 쪽(=나중 날짜)을 남긴다.
+        // 안 정하면 어느 쪽이 살지 실행마다 달라진다.
+        return b.at - a.at || (a.name < b.name ? 1 : a.name > b.name ? -1 : 0);
       });
-      for (var i = 1; i < list.length; i++) { list[i].setTrashed(true); trashed++; }
-    });
-    return { topics: topics.length, trashed: trashed };
+      for (var i = 1; i < list.length; i++) {
+        if (trashed >= CFG.memoryTrashBudget) { capped = true; break; }
+        list[i].file.setTrashed(true);
+        trashed++;
+      }
+      if (capped) break;
+    }
+
+    var out = { topics: keys.length, trashed: trashed, files: matched };
+    if (unnamed) out.unnamed = unnamed;
+    if (capped) out.trashCapped = true;
+    return out;
   }
 
   // ── 데이터가 멈춘 걸 알아채기 ────────────────────────────────────
@@ -654,6 +703,21 @@ var KMApp = (function () {
 
   // ── 상태 쓰기 ────────────────────────────────────────────────────
 
+  /**
+   * 메모리를 한 번이라도 본 적이 있는지. 처음 본 날을 남기고 true 를 준다.
+   *
+   * ⚠️ **'지금 비었다' 로는 아무것도 못 판단한다.** 어제 설치한 사람도 비어
+   *    있고, 커넥터가 읽기 전용이라 AI 가 여섯 달째 한 줄도 못 쓴 사람도
+   *    비어 있다. 상태 파일은 매일 덮여서 어제를 못 본다 — 그래서 여기서만
+   *    가를 수 있다. "왜 기억을 못 해?" 를 받았을 때 볼 자리다.
+   */
+  function markMemorySeen(props, files, at) {
+    if (props.getProperty(PROP.memorySeen)) return true;
+    if (!files) return false;
+    props.setProperty(PROP.memorySeen, String(at).slice(0, 10));
+    return true;
+  }
+
   function writeStatus(env, result) {
     result.at = new Date().toISOString();
     var folder = ensureFolder(env.drive, CFG.folderName);
@@ -664,6 +728,7 @@ var KMApp = (function () {
     if (mem) {
       result.memory = mem;
       if (mem.topics > CFG.memoryMax) result.memoryOverflow = mem.topics;
+      if (!markMemorySeen(env.props, mem.files, result.at)) result.memoryNeverUsed = true;
     }
     putJson(folder, CFG.statusName, JSON.stringify(result, null, 2));
     writeStatusToSheet(env, result);
@@ -910,7 +975,8 @@ var KMApp = (function () {
     readJson: readJson, readPrevious: readPrevious, pruneFacts: pruneFacts,
     dataAge: dataAge, freshnessLine: freshnessLine, isStale: isStale,
     ensureAgentGuide: ensureAgentGuide, AGENT_GUIDE: AGENT_GUIDE,
-    memoTopic: memoTopic, pruneMemory: pruneMemory,
+    memoTopic: memoTopic, topicKey: topicKey, pruneMemory: pruneMemory,
+    markMemorySeen: markMemorySeen,
     writeStatus: writeStatus, writeStatusToSheet: writeStatusToSheet,
     safeCell: safeCell, localTime: localTime, hint: hint,
     menuSpec: menuSpec, menu: menu, menuSetup: menuSetup, menuSetPassword: menuSetPassword,
