@@ -413,3 +413,25 @@ test('산출물에 원본 거래가 실리지 않는다 — 커넥터 19KB 절�
   const size = JSON.stringify(build(txns)).length;
   assert.ok(size < 12000, '거래 3,000건인데 산출물이 ' + size + ' bytes');
 });
+
+
+// ── 소스 위생 ──────────────────────────────────────────────────────
+
+test('소스에 NUL 바이트가 없다 — 두 번 당한 함정이다', () => {
+  // 한 번은 itemKey 구분자로, 한 번은 그 사실을 설명하는 주석에 들어갔다.
+  // NUL 은 산출물 JSON 까지 실려 나가고, 소스를 바이너리로 만들어
+  // grep 이 매치를 조용히 감춘다. 눈으로는 공백과 구분되지 않는다.
+  const dirs = ['core', 'appsscript', 'test', 'scripts'];
+  const offenders = [];
+  dirs.forEach((d) => {
+    const dir = path.join(H.ROOT, d);
+    if (!fs.existsSync(dir)) return;
+    fs.readdirSync(dir)
+      .filter((n) => /\.(js|gs|py)$/.test(n))
+      .forEach((n) => {
+        const buf = fs.readFileSync(path.join(dir, n));
+        if (buf.includes(0)) offenders.push(d + '/' + n);
+      });
+  });
+  assert.deepStrictEqual(offenders, []);
+});
