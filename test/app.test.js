@@ -532,18 +532,90 @@ test('AGENT.md 가 낡았으면 갱신한다', () => {
 });
 
 test('AGENT.md 가 쓰기 규칙과 경계를 담는다', () => {
-  // 이 파일의 값어치는 두 가지다 — AI 가 내정보.json 을 쓸 줄 알게 하는 것,
-  // 그리고 우리가 안 하기로 한 걸 AI 도 안 하게 하는 것.
   const A = loadApp();
-  assert.match(A.AGENT_GUIDE, /내정보\.json/);
-  assert.match(A.AGENT_GUIDE, /k-money\/profile@1/, '스키마가 있어야 따라 쓸 수 있다');
+  assert.match(A.AGENT_GUIDE, /고칠 수도 지울 수도 없습니다/,
+    'AI 가 자기 제약을 알아야 갱신 절차를 따른다');
+  assert.match(A.AGENT_GUIDE, /먼저 읽으세요/, '읽고 나서 새로 쓰라고 해야 한다');
+  assert.match(A.AGENT_GUIDE, /지금 참인 것만/, '이력을 쌓으면 모순이 남는다');
+  assert.match(A.AGENT_GUIDE, /그대로/, '주제 이름이 흔들리면 중복 주제가 된다');
   assert.match(A.AGENT_GUIDE, /추천하지 마세요/, '상품 추천 금지가 빠졌다');
-  assert.match(A.AGENT_GUIDE, /먼저 읽고 합치세요/, '덮어쓰면 예전 목표가 사라진다');
   assert.match(A.AGENT_GUIDE, /period/, '기간을 넘겨짚지 말라고 해야 한다');
-  // 우리가 내보내는 파일 이름과 안내가 어긋나면 AI 가 못 찾는다.
+  // 우리가 쓰는 이름과 안내가 어긋나면 AI 가 못 찾는다.
   assert.ok(A.AGENT_GUIDE.indexOf(A.CFG.latestName) !== -1);
-  assert.ok(A.AGENT_GUIDE.indexOf(A.CFG.profileName) !== -1);
+  assert.ok(A.AGENT_GUIDE.indexOf(A.CFG.memoryFolder) !== -1);
   assert.ok(A.AGENT_GUIDE.indexOf(A.CFG.statusName) !== -1);
+});
+
+// ── 메모리 ────────────────────────────────────────────────────────
+
+test('memoTopic — 날짜를 벗기고 주제만 남긴다', () => {
+  const A = loadApp();
+  assert.equal(A.memoTopic('2026-08-09-목표.md'), '목표');
+  assert.equal(A.memoTopic('2026-08-09-1430-목표.md'), '목표');
+  assert.equal(A.memoTopic('2026-08-09T14:30-이직생각.md'), '이직생각');
+  assert.equal(A.memoTopic('2026-08-09_수입.md'), '수입');
+});
+
+test('memoTopic — 규칙에 안 맞으면 null (유저 파일을 건드리지 않는다)', () => {
+  const A = loadApp();
+  [ '메모.md', 'AGENT.md', '내가 쓴 글.md', '2026-목표.md' ].forEach((n) => {
+    assert.equal(A.memoTopic(n), null, n);
+  });
+});
+
+test('pruneMemory — 주제마다 최신 하나만 남긴다', () => {
+  const A = loadApp();
+  const root = fakeFolder('돈동생');
+  const mem = root.createFolder(A.CFG.memoryFolder);
+  const put = (name, t) => {
+    const f = mem.createFile(fakeBlob(name, 'x'));
+    f.getDateCreated = () => new Date(t);
+    return f;
+  };
+  const old1 = put('2026-08-01-목표.md', '2026-08-01');
+  const new1 = put('2026-08-09-목표.md', '2026-08-09');
+  const only = put('2026-08-05-수입.md', '2026-08-05');
+
+  const r = A.pruneMemory(root);
+  assert.equal(r.topics, 2);
+  assert.equal(r.trashed, 1);
+  assert.ok(!mem._files.has('2026-08-01-목표.md'), '옛 것이 남아 있다');
+  assert.ok(mem._files.has('2026-08-09-목표.md'), '최신을 지웠다');
+  assert.ok(mem._files.has('2026-08-05-수입.md'), '다른 주제를 건드렸다');
+});
+
+test('pruneMemory — 순서는 파일 이름이 아니라 생성 시각으로 본다', () => {
+  // AI 가 날짜를 틀리게 붙일 수 있다. 시간대를 모르거나 오늘이 며칠인지 모른다.
+  const A = loadApp();
+  const root = fakeFolder('돈동생');
+  const mem = root.createFolder(A.CFG.memoryFolder);
+  const put = (name, t) => {
+    const f = mem.createFile(fakeBlob(name, 'x'));
+    f.getDateCreated = () => new Date(t);
+  };
+  // 이름은 8/01 인데 실제로는 나중에 만들어졌다
+  put('2026-08-20-목표.md', '2026-08-01');
+  put('2026-08-01-목표.md', '2026-08-20');
+
+  A.pruneMemory(root);
+  assert.ok(mem._files.has('2026-08-01-목표.md'), '이름만 보고 지웠다');
+  assert.ok(!mem._files.has('2026-08-20-목표.md'));
+});
+
+test('pruneMemory — 규칙에 안 맞는 파일은 손대지 않는다', () => {
+  const A = loadApp();
+  const root = fakeFolder('돈동생');
+  const mem = root.createFolder(A.CFG.memoryFolder);
+  mem.createFile(fakeBlob('내가 직접 쓴 메모.md', 'x'));
+  mem.createFile(fakeBlob('사진.png', 'x'));
+  const r = A.pruneMemory(root);
+  assert.equal(r.trashed, 0);
+  assert.equal(mem._files.size, 2, '유저 파일을 지웠다');
+});
+
+test('pruneMemory — 메모리 폴더가 없으면 조용히 넘어간다', () => {
+  const A = loadApp();
+  assert.equal(A.pruneMemory(fakeFolder('돈동생')), null);
 });
 
 test('메뉴 항목이 컨테이너의 실제 함수를 가리킨다', () => {

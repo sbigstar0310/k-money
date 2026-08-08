@@ -12,4 +12,4 @@
 
 'use strict';
 
-module.exports = ['model', 'layout', 'analyze', 'parse', 'profile', 'aggregate'];
+module.exports = ['model', 'layout', 'analyze', 'parse', 'aggregate'];

@@ -41,8 +41,9 @@ var KMApp = (function () {
     rawFolderName: 'raw',
     latestName: '돈동생-최신.json',
     statusName: '돈동생-상태.json',
-    profileName: '내정보.json',
     agentName: 'AGENT.md',
+    memoryFolder: '메모리',
+    memoryMax: 40,        // 주제가 이보다 많으면 시트에 알린다
     // 지난 기록은 '돈동생-YYYY-MM-DD.json'. 최신본과 접두사가 같으므로
     // 날짜 모양까지 봐야 한다 — 안 그러면 최신본을 히스토리로 세서 지운다.
     historyPattern: /^돈동생-\d{4}-\d{2}-\d{2}\.json$/,
@@ -91,6 +92,8 @@ var KMApp = (function () {
     var folder = ensureFolder(env.drive, CFG.folderName);
     var raw = ensureFolder(folder, CFG.rawFolderName);
     ensureAgentGuide(folder);
+    // 빈 폴더라도 만들어 둔다 — AI 에게 "여기 써도 된다" 는 신호다.
+    ensureFolder(folder, CFG.memoryFolder);
     var stamp = Utilities.formatDate(found.date, env.tz, 'yyyy-MM-dd');
 
     // 1) 원본 보존 — 집계를 고쳤을 때 과거를 다시 계산할 수 있어야 한다
@@ -138,7 +141,10 @@ var KMApp = (function () {
       var extract = KM.parse.extract(sheets);
       facts = KM.aggregate.build(extract, {
         asOf: stamp,
-        profile: readJson(folder, CFG.profileName),
+        // 개인화는 메모리 폴더의 마크다운으로 간다. facts 에 싣지 않는다 —
+        // 우리가 그 값으로 계산하지 않으므로 실어 나를 이유가 없고,
+        // 실으면 스키마가 유저의 자유로운 문장을 좁힌다.
+        profile: null,
       });
       facts.generatedAt = new Date().toISOString();
       facts.sourceMessageId = found.id;
@@ -338,7 +344,7 @@ var KMApp = (function () {
       '|---|---|',
       '| `돈동생-최신.json` | **이걸 읽으세요.** 가장 최근 집계 |',
       '| `돈동생-YYYY-MM-DD.json` | 지난 기록. 비교가 필요할 때만 |',
-      '| `내정보.json` | 사용자의 목표와 가정. 없을 수도 있습니다 |',
+      '| `메모리/` | 사용자에 대해 알게 된 것. **여기를 먼저 읽으세요** |',
       '| `돈동생-상태.json` | 마지막 실행 결과. 사용자가 "왜 안 돌아?" 물을 때만 |',
       '| `raw/` | 원본 zip. 열지 마세요 |',
       '',
@@ -360,45 +366,63 @@ var KMApp = (function () {
       '',
       '`dataQuality.flags`를 확인하세요. 여기 뭔가 있으면 그걸 감안해서 답해야 합니다.',
       '',
-      '## 사용자의 목표를 기억하는 법',
+      '## 사용자를 기억하는 법 — `메모리/` 폴더',
       '',
-      '대화에서 목표나 상황을 알게 되면 **이 폴더의 `내정보.json`에 적어 두세요.**',
-      '그러면 다음 대화에서도 이어집니다. 안 적으면 대화가 끝나는 순간 사라집니다.',
+      '대화에서 알게 된 것을 **`메모리/` 폴더에 마크다운으로 적어 두세요.**',
+      '안 적으면 대화가 끝나는 순간 사라집니다. 목표, 수입, 사는 형편, 신경 쓰는 것 —',
+      '숫자든 문장이든 상관없습니다.',
       '',
-      '```json',
-      '{',
-      '  "schema": "k-money/profile@1",',
-      '  "goals": [',
-      '    {',
-      '      "label": "3년 안에 5천만원",',
-      '      "amount": 50000000,',
-      '      "by": "2029-08",',
-      '      "estimated": false,',
-      '      "source": "user",',
-      '      "at": "2026-08-08"',
-      '    }',
-      '  ],',
-      '  "assumptions": {',
-      '    "monthlyIncome": { "value": 2600000, "source": "user", "at": "2026-08-08" }',
-      '  },',
-      '  "notes": "내년 이직 예정. 월세 62만원."',
-      '}',
+      '### 파일 이름 규칙',
+      '',
+      '```',
+      '메모리/2026-08-09-목표.md',
+      '메모리/2026-08-09-수입.md',
+      '메모리/2026-08-09-이직생각.md',
+      '        └날짜┘ └주제┘',
       '```',
       '',
-      '**규칙**',
+      '**주제 하나에 파일 하나입니다.** 날짜를 앞에 붙이는 건 이름이 겹치지 않게',
+      '하려는 것뿐이에요. 돈동생이 매일 아침 **주제별로 가장 최신 것만 남기고',
+      '나머지는 휴지통으로** 보냅니다.',
       '',
-      '- `amount`는 **원 단위 숫자**여야 합니다. "5천만원" 같은 문자열은 안 됩니다',
-      '- 사용자가 "전세 구하고 싶어"처럼 금액 없이 말하면 **당신이 숫자로 바꾸세요.**',
-      '  그게 당신이 잘하고 돈동생이 못하는 일입니다. 다만 `estimated: true`로 표시하고',
-      '  "1.5억으로 잡았는데 맞나요?"라고 되물으세요',
-      '- `source`는 사용자가 직접 말했으면 `"user"`, 당신이 추정했으면 `"llm"`',
-      '- `at`은 오늘 날짜. 나중에 "언제 들은 말인지" 알아야 갱신할 수 있습니다',
-      '- 이미 파일이 있으면 **먼저 읽고 합치세요.** 통째로 덮어쓰면 예전 목표가 사라집니다',
-      '- `notes`에는 숫자로 안 떨어지는 맥락을 자유롭게 적으세요',
+      '### 그래서 갱신하는 법',
       '',
-      '**쓰지 못하는 경우** — 드라이브 연결이 읽기 전용이면 파일을 만들 수 없습니다.',
-      '그때는 사용자에게 위 JSON을 보여주고 "돈동생 폴더에 `내정보.json`으로 저장해',
-      '두시면 다음에도 기억해요"라고 알려주세요.',
+      '당신은 파일을 **고칠 수도 지울 수도 없습니다.** 새로 만드는 것만 됩니다.',
+      '그러니 어떤 주제를 갱신할 때는:',
+      '',
+      '1. `메모리/` 를 훑어 **그 주제의 현재 파일을 먼저 읽으세요**',
+      '2. 아직 맞는 내용은 가져오고, 바뀐 건 새 값으로, 틀린 건 버리고',
+      '3. **오늘 날짜로 같은 주제 이름의 파일을 새로 만드세요**',
+      '',
+      '새 파일에는 **지금 참인 것만** 담으세요. "예전엔 260만이었는데 지금은 300만"',
+      '같은 이력은 필요할 때만 남기고, 보통은 최신 값만 두면 됩니다.',
+      '',
+      '주제 이름은 **기존 파일에 쓰인 것을 그대로** 쓰세요. `목표` 를 `재무목표` 로',
+      '바꾸면 돈동생이 다른 주제로 보고 둘 다 남깁니다.',
+      '',
+      '### 파일 안에는',
+      '',
+      '맨 위에 언제·어디서 나온 말인지 적어 두세요. 나중에 당신이 이걸 다시 읽을 때',
+      '갱신할지 판단하는 근거가 됩니다.',
+      '',
+      '```markdown',
+      '# 목표',
+      '',
+      '- 3년 안에 5천만원 (2029-08까지)',
+      '- 그다음은 전세 보증금. 금액은 아직 안 정함',
+      '',
+      '---',
+      '2026-08-09 · 사용자가 직접 말함',
+      '```',
+      '',
+      '추정한 값이면 그렇게 적으세요. `2026-08-09 · 내가 추정 (사용자 확인 안 함)`.',
+      '그리고 사용자에게 **되물어서** 확인받으세요.',
+      '',
+      '### 못 쓰는 경우',
+      '',
+      '드라이브 연결이 읽기 전용이면 파일을 만들 수 없습니다. 그때는 사용자에게',
+      '내용을 보여주고 "`돈동생/메모리/` 에 이 이름으로 저장해 두시면 다음에도',
+      '기억해요" 라고 알려주세요.',
       '',
       '## 하지 않을 것',
       '',
@@ -436,6 +460,63 @@ var KMApp = (function () {
       return;
     }
     folder.createFile(Utilities.newBlob(AGENT_GUIDE, 'text/markdown', CFG.agentName));
+  }
+
+  // ── 메모리 정리 ──────────────────────────────────────────────────
+  //
+  // ⚠️ **AI 는 만들 줄만 안다.** 드라이브 커넥터에 수정도 삭제도 없다.
+  //    같은 이름으로 다시 쓰면 덮이지 않고 **파일이 하나 더 생긴다** (실측).
+  //    그래서 AI 에게 "고쳐 써라" 를 시킬 수 없다.
+  //
+  //    역할을 가른다. **AI 는 쌓고, 우리는 치운다.**
+  //    AI 는 'YYYY-MM-DD-주제.md' 로 새 파일만 만든다 (이름이 안 부딪힌다).
+  //    우리는 주제별로 묶어 **최신 하나만 남기고 나머지를 휴지통으로** 보낸다.
+  //
+  //    내용은 읽지 않는다. 합치지도 않는다 — 그건 해석이고 우리 일이 아니다.
+  //    "3월엔 260만이라 했고 7월엔 300만이라 했는데 뭐가 맞나" 는 AI 가
+  //    새 파일을 쓸 때 정리할 문제다.
+
+  /** 'YYYY-MM-DD[-HHMM]-주제.md' 에서 주제만. 규칙에 안 맞으면 null. */
+  function memoTopic(name) {
+    var base = String(name).replace(/\.md$/i, '');
+    var m = /^(\d{4}-\d{2}-\d{2})(?:[T\-_ ]\d{2}:?\d{2})?[-_ ](.+)$/.exec(base);
+    return m && m[2] ? m[2].trim() : null;
+  }
+
+  /**
+   * 주제마다 최신 하나만 남긴다.
+   *
+   * ⚠️ **순서는 파일 이름이 아니라 드라이브 생성 시각으로 본다.** AI 가 붙인
+   *    날짜는 시간대를 틀리거나 오늘이 며칠인지 몰라 어긋날 수 있다.
+   *    이름에서 가져오는 건 주제뿐이다.
+   * ⚠️ **규칙에 안 맞는 이름은 건드리지 않는다.** 유저가 직접 넣어 둔 파일을
+   *    우리가 지우면 안 된다.
+   * ⚠️ 영구 삭제가 아니라 휴지통이다. AI 가 잘못 갱신해도 30일 안에 되돌린다.
+   */
+  function pruneMemory(folder) {
+    var it = folder.getFoldersByName(CFG.memoryFolder);
+    if (!it.hasNext()) return null;
+    var mem = it.next();
+
+    var byTopic = {};
+    var files = mem.getFiles();
+    while (files.hasNext()) {
+      var f = files.next();
+      var topic = memoTopic(f.getName());
+      if (!topic) continue;
+      if (!byTopic[topic]) byTopic[topic] = [];
+      byTopic[topic].push(f);
+    }
+
+    var topics = Object.keys(byTopic);
+    var trashed = 0;
+    topics.forEach(function (t) {
+      var list = byTopic[t].sort(function (a, b) {
+        return b.getDateCreated().getTime() - a.getDateCreated().getTime();
+      });
+      for (var i = 1; i < list.length; i++) { list[i].setTrashed(true); trashed++; }
+    });
+    return { topics: topics.length, trashed: trashed };
   }
 
   // ── 데이터가 멈춘 걸 알아채기 ────────────────────────────────────
@@ -487,6 +568,12 @@ var KMApp = (function () {
     var folder = ensureFolder(env.drive, CFG.folderName);
     // 첫 실행이 idle 이어도 안내는 있어야 한다 — 유저가 폴더를 먼저 열 수 있다.
     ensureAgentGuide(folder);
+    ensureFolder(folder, CFG.memoryFolder);
+    var mem = pruneMemory(folder);
+    if (mem) {
+      result.memory = mem;
+      if (mem.topics > CFG.memoryMax) result.memoryOverflow = mem.topics;
+    }
     putJson(folder, CFG.statusName, JSON.stringify(result, null, 2));
     writeStatusToSheet(env, result);
   }
@@ -737,6 +824,7 @@ var KMApp = (function () {
     readJson: readJson, readPrevious: readPrevious, pruneFacts: pruneFacts,
     dataAge: dataAge, freshnessLine: freshnessLine, isStale: isStale,
     ensureAgentGuide: ensureAgentGuide, AGENT_GUIDE: AGENT_GUIDE,
+    memoTopic: memoTopic, pruneMemory: pruneMemory,
     writeStatus: writeStatus, writeStatusToSheet: writeStatusToSheet,
     safeCell: safeCell, localTime: localTime, hint: hint,
     menuSpec: menuSpec, menu: menu, menuSetup: menuSetup, menuSetPassword: menuSetPassword,

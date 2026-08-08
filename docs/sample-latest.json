@@ -578,7 +578,7 @@
     "derived": "합계·차액·비율·연환산은 여기 있는 숫자로 계산해 써라. 다만 pace 와 avgMonthlyExpense 는 이미 보정된 값이니 그대로 쓴다.",
     "truncation": "otherTotal·otherAccountsTotal·external.other 는 목록에서 잘려나간 나머지다. 합계를 검산할 때 같이 더해라.",
     "recurring": "recurring 은 금액이 일정한 모든 지출을 잡는다 — 월세·식비도 들어간다. items 의 label 을 보고 구독과 생활비를 구분해라.",
-    "goals": "목표 금액은 유저가 정한다. 우리가 예시 금액을 먼저 던지지 않는다. profile 이 있으면 유저가 예전에 말한 목표다. 없으면 이번 대화에서만 유효하다 — 드라이브의 profile.json 은 유저가 직접 올려야 하고, 네가 쓸 수는 없다.",
+    "goals": "목표 금액은 유저가 정한다. 우리가 예시 금액을 먼저 던지지 않는다. 유저에 대해 알게 된 것은 같은 폴더의 메모리/ 에 있다 — AGENT.md 를 읽어라.",
     "scope": "이 도구는 사실·계산·비교까지만 한다. 상품 추천이나 매매 판단은 하지 않는다.",
     "currency": "KRW. 원 단위 정수."
   },

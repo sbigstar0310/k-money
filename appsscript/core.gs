@@ -2,7 +2,7 @@
  * ⚠️ 자동 생성 파일 — 직접 고치지 마라.
  *
  *   생성: node scripts/build-gs.js
- *   원본: core/model.js, core/layout.js, core/analyze.js, core/parse.js, core/profile.js, core/aggregate.js
+ *   원본: core/model.js, core/layout.js, core/analyze.js, core/parse.js, core/aggregate.js
  *
  * 고칠 일이 있으면 core/ 를 고치고 다시 생성하라. 여기서 고치면
  * 다음 생성 때 조용히 덮어써진다.
@@ -972,109 +972,6 @@ KM.parse = (function () {
 
 
 // ════════════════════════════════════════════════════════════════════
-// core/profile.js
-// ════════════════════════════════════════════════════════════════════
-
-/**
- * 유저 컨텍스트 — 대화로 쌓이는 것.
- *
- * `Drive/돈동생/내정보.json`. **유저가 직접 올린다** (드라이브 커넥터는 대개
- * 읽기 전용이라 LLM 이 쓸 수 없다). 유저가 JSON을
- * 손으로 고치는 일은 없어야 한다 — 타겟이 사회 초년생이다.
- *
- * ━━ 진술은 관측을 이기지 않는다 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- *
- * 유저가 "나 월 180 벌어"라고 말해도 그게 기록을 덮어쓰지 않는다.
- *
- *   기록이 믿을 만하다        → 기록을 쓴다
- *   기록이 못 미덥다          → 진술을 쓰되 **출처를 밝힌다**
- *   둘이 크게 다르다          → 둘 다 보여주고 묻는다
- *
- * 이 규칙이 LLM 환각에 대한 방어이기도 하다. 진술값에는 항상 꼬리표가 붙으므로,
- * 잘못 기록된 값이 리포트에 조용히 섞이지 않는다.
- *
- * ━━ 모든 값에 출처와 시점을 남긴다 ━━━━━━━━━━━━━━━━━━━━━━━━━━
- *
- * 연봉이 오르면 갱신해야 하는데, 언제 들은 말인지 모르면 갱신할 시점을 모른다.
- * 그래서 { value, source, at } 꼴을 쓴다. 맨값도 받아주되 정규화한다.
- */
-
-var KM = (globalThis.KM = globalThis.KM || {});
-
-KM.profile = (function () {
-  'use strict';
-
-  var SCHEMA = 'k-money/profile@1';
-
-  function defaults() {
-    return {
-      schema: SCHEMA,
-      goals: [],
-      assumptions: {},
-    };
-  }
-
-  /** { value, source, at } 꼴로 통일한다. 맨값이 와도 받아준다. */
-  function entry(v, source, at) {
-    if (v === null || v === undefined) return null;
-    if (typeof v === 'object' && 'value' in v) {
-      return { value: v.value, source: v.source || 'unknown', at: v.at || null };
-    }
-    return { value: v, source: source || 'unknown', at: at || null };
-  }
-
-  function valueOf(e, fallback) {
-    return e && e.value !== null && e.value !== undefined ? e.value : fallback;
-  }
-
-  /**
-   * 읽은 JSON을 안전한 모양으로. 깨졌거나 없으면 기본값으로 돌아간다.
-   * 여기서 던지면 안 된다 — 프로필이 없다고 리포트 전체가 멈추면 안 되기 때문이다.
-   */
-  function normalize(raw) {
-    var p = defaults();
-    if (!raw || typeof raw !== 'object') return p;
-
-    if (Array.isArray(raw.goals)) {
-      p.goals = raw.goals
-        .filter(function (g) { return g && typeof g.amount === 'number' && g.amount > 0; })
-        .map(function (g) {
-          return {
-            id: String(g.id || g.label || 'goal'),
-            label: String(g.label || g.id || '목표'),
-            // 목표를 숫자로 바꾸는 건 **우리 일이 아니다.**
-            // "전세 구하고 싶어", "20대 남성 상위 10%" 같은 건 바깥 지식과 해석이
-            // 필요하고, 그건 LLM 이 잘하고 우리가 못한다. 우리는 숫자를 받아 산수만 한다.
-            amount: Math.round(g.amount),
-            // 유저가 직접 말한 숫자인지, LLM 이 대신 추정한 숫자인지 구분한다.
-            // 추정이면 LLM 이 "1.5억으로 잡았는데 맞나요?" 라고 되물어야 한다.
-            estimated: !!g.estimated,
-            by: g.by || null, // 'YYYY-MM'. 없어도 된다 — 시점 없는 목표도 목표다
-            byIsDefault: !!g.byIsDefault,
-            source: g.source || 'unknown',
-            at: g.at || null,
-          };
-        });
-    }
-
-    var a = raw.assumptions || {};
-    ['monthlyIncome', 'monthlyExpense', 'annualReturn'].forEach(function (k) {
-      var e = entry(a[k]);
-      if (e && typeof e.value === 'number' && isFinite(e.value)) p.assumptions[k] = e;
-    });
-
-    return p;
-  }
-
-
-  return {
-    SCHEMA: SCHEMA,
-    defaults: defaults, normalize: normalize, entry: entry, valueOf: valueOf,
-  };
-})();
-
-
-// ════════════════════════════════════════════════════════════════════
 // core/aggregate.js
 // ════════════════════════════════════════════════════════════════════
 
@@ -1212,12 +1109,14 @@ KM.aggregate = (function () {
       if (snap.age) out.ownerAge = snap.age;
     }
 
-    // 유저가 대화로 쌓은 것. **계산하지 않고 그대로 실어 나른다** —
-    // 목표를 숫자로 바꾸는 건 LLM 일이고, 우리는 세션 사이를 잇는 역할만 한다.
-    var profile = KM.profile.normalize(opts.profile);
-    if (profile.goals.length || Object.keys(profile.assumptions).length) {
-      out.profile = { goals: profile.goals, assumptions: profile.assumptions };
-    }
+    // 개인화는 여기 없다. 유저에 대해 알게 된 것은 드라이브의 `메모리/` 폴더에
+    // 마크다운으로 쌓이고, AI 가 직접 읽는다.
+    //
+    // ⚠️ **facts 에 싣지 않는 이유** — 우리가 그 값으로 계산을 안 한다.
+    //    예전에는 profile.json 을 읽어 그대로 실어 날랐는데, 실어 나르기만 할
+    //    거면 스키마를 강요할 이유가 없었다. 스키마는 "부모님 용돈 매달 30만원",
+    //    "커피값에 민감함" 같은 걸 담지 못하고 유저를 좁히기만 한다.
+    //    목표를 숫자로 바꾸는 것도, 모순을 정리하는 것도 AI 일이다.
 
     out.dataQuality = quality(tb, extract, material, out.pace);
 
@@ -1597,7 +1496,7 @@ KM.aggregate = (function () {
     // ⚠️ 여기에 금액을 적지 마라. goalTable(5천만·1억·2억)을 '우리가 고른
     //    상수라 판단이지 집계가 아니다' 라며 지웠는데, 같은 숫자가 산문으로
     //    돌아와 있었다. 문장으로 적으면 안 걸린다는 게 함정이다.
-    goals: '목표 금액은 유저가 정한다. 우리가 예시 금액을 먼저 던지지 않는다. profile 이 있으면 유저가 예전에 말한 목표다. 없으면 이번 대화에서만 유효하다 — 드라이브의 profile.json 은 유저가 직접 올려야 하고, 네가 쓸 수는 없다.',
+    goals: '목표 금액은 유저가 정한다. 우리가 예시 금액을 먼저 던지지 않는다. 유저에 대해 알게 된 것은 같은 폴더의 메모리/ 에 있다 — AGENT.md 를 읽어라.',
     scope: '이 도구는 사실·계산·비교까지만 한다. 상품 추천이나 매매 판단은 하지 않는다.',
     currency: 'KRW. 원 단위 정수.',
   };

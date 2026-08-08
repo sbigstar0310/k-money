@@ -132,12 +132,14 @@ KM.aggregate = (function () {
       if (snap.age) out.ownerAge = snap.age;
     }
 
-    // 유저가 대화로 쌓은 것. **계산하지 않고 그대로 실어 나른다** —
-    // 목표를 숫자로 바꾸는 건 LLM 일이고, 우리는 세션 사이를 잇는 역할만 한다.
-    var profile = KM.profile.normalize(opts.profile);
-    if (profile.goals.length || Object.keys(profile.assumptions).length) {
-      out.profile = { goals: profile.goals, assumptions: profile.assumptions };
-    }
+    // 개인화는 여기 없다. 유저에 대해 알게 된 것은 드라이브의 `메모리/` 폴더에
+    // 마크다운으로 쌓이고, AI 가 직접 읽는다.
+    //
+    // ⚠️ **facts 에 싣지 않는 이유** — 우리가 그 값으로 계산을 안 한다.
+    //    예전에는 profile.json 을 읽어 그대로 실어 날랐는데, 실어 나르기만 할
+    //    거면 스키마를 강요할 이유가 없었다. 스키마는 "부모님 용돈 매달 30만원",
+    //    "커피값에 민감함" 같은 걸 담지 못하고 유저를 좁히기만 한다.
+    //    목표를 숫자로 바꾸는 것도, 모순을 정리하는 것도 AI 일이다.
 
     out.dataQuality = quality(tb, extract, material, out.pace);
 
@@ -517,7 +519,7 @@ KM.aggregate = (function () {
     // ⚠️ 여기에 금액을 적지 마라. goalTable(5천만·1억·2억)을 '우리가 고른
     //    상수라 판단이지 집계가 아니다' 라며 지웠는데, 같은 숫자가 산문으로
     //    돌아와 있었다. 문장으로 적으면 안 걸린다는 게 함정이다.
-    goals: '목표 금액은 유저가 정한다. 우리가 예시 금액을 먼저 던지지 않는다. profile 이 있으면 유저가 예전에 말한 목표다. 없으면 이번 대화에서만 유효하다 — 드라이브의 profile.json 은 유저가 직접 올려야 하고, 네가 쓸 수는 없다.',
+    goals: '목표 금액은 유저가 정한다. 우리가 예시 금액을 먼저 던지지 않는다. 유저에 대해 알게 된 것은 같은 폴더의 메모리/ 에 있다 — AGENT.md 를 읽어라.',
     scope: '이 도구는 사실·계산·비교까지만 한다. 상품 추천이나 매매 판단은 하지 않는다.',
     currency: 'KRW. 원 단위 정수.',
   };
