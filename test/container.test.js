@@ -283,6 +283,26 @@ test('문제해결 표의 문구가 코드가 실제로 내는 말과 같다', (
   });
 });
 
+test('설치를 조용히 깨뜨리는 두 가지를 안내가 단계로 말한다', () => {
+  // ⚠️ **둘 다 실측이다.** 처음엔 "안 뜨는 경우가 있어요" · "체크를 빼지
+  //    마세요" 라고 **예외와 경고**로 적혀 있었다. 실제로는 새로고침이
+  //    매번 필요하고, 체크박스는 기본으로 꺼져 있다. 둘 다 안 하면
+  //    **오류 없이** 아무 일도 안 일어난다 — 유저는 고장을 못 알아챈다.
+  //    다듬다가 다시 조건부 문장으로 돌아가기 쉬워서 여기서 잡는다.
+  const md = fs.readFileSync(path.join(ROOT, 'docs', 'install.md'), 'utf8');
+  const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+
+  [['install.md', md], ['README.md', readme]].forEach(function (pair) {
+    const name = pair[0], text = pair[1];
+    assert.match(text, /새로고침/, name + ' 에 새로고침 안내가 없다');
+    // '경우가 있어요' 로 적으면 유저는 자기는 아닌 줄 알고 넘어간다.
+    assert.doesNotMatch(text, /메뉴가 바로 안 뜨는 경우가 있어요/,
+      name + ' 이 새로고침을 예외처럼 적고 있다 — 매번 필요하다');
+    assert.match(text, /꺼진 채로|꺼져 있으니|직접 체크|직접 켜기/,
+      name + ' 에 체크박스가 기본으로 꺼져 있다는 말이 없다');
+  });
+});
+
 test('CHANGELOG 에 현재 버전 항목이 있고 올릴지 여부를 밝힌다', () => {
   // 유저에게 "바뀐 것들을 보고 올릴지 정하세요" 라고 안내한다.
   // 여기가 비어 있으면 그 안내가 통째로 헛돈다.
