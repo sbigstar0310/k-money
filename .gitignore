@@ -1,0 +1,28 @@
+# 시크릿 — 절대 커밋 금지
+.env
+.env.local
+secrets/
+*.credentials.json
+token.json
+client_secret*.json
+
+# 개인 금융 데이터 — 절대 커밋 금지
+data/
+*.zip
+*.xlsx
+*.xls
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# macOS
+.DS_Store
