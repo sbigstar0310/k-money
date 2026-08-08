@@ -30,6 +30,17 @@ function loadMain(stubs) {
   return ctx;
 }
 
+/**
+ * 함수 하나의 본문만 잘라낸다. 고정 길이로 자르면 다음 함수까지 먹어서,
+ * **옆 함수에 있는 코드로 단언이 통과한다.** 실제로 그렇게 뚫렸다.
+ */
+function fnBody(src, name) {
+  const i = src.indexOf('function ' + name);
+  assert.notEqual(i, -1, name + ' 을 못 찾았다 — 테스트가 헛돌고 있다');
+  const j = src.indexOf('\nfunction ', i + 1);
+  return src.slice(i, j === -1 ? src.length : j);
+}
+
 /** 라이브러리가 정상 연결된 상태. */
 function lib(version) {
   return { kmoneylib: { buildFacts() {}, version: () => version, schema: () => 'facts@2' } };
@@ -42,27 +53,59 @@ function lib(version) {
 // 코드가 아니라 권한 목록만 보고 확인할 수 있어야 한다.
 
 /**
- * `name` 이 **주석 밖에서** 나오는 줄들.
+ * 소스를 훑어 **주석과 문자열을 지운 코드**와 **문자열 목록**을 돌려준다.
  *
- * 주석을 정규식으로 걷어내는 방법을 먼저 썼다가 물렸다. `'a//b'` 같은
- * 문자열이 있으면 그 줄의 뒷부분이 통째로 잘려서, 거기 있는 진짜 호출이
- * **사라진 채로 통과한다.** 보안 단언에서 과다 제거는 위음성이라 최악이다.
- * 그래서 원문을 줄 단위로 보고, 주석으로 시작하는 줄만 뺀다.
+ * 정규식으로 두 번 시도했다가 두 번 다 뚫렸다.
+ *
+ *   1차 `replace(/\/\/.*$/gm, '')` — `'a//b'` 같은 문자열이 있으면 그 줄의
+ *      **뒷부분이 통째로 사라진다.** 거기 진짜 호출이 있어도 안 보인다.
+ *   2차 "주석으로 시작하는 줄만 버리기" — `/* ok *​/ UrlFetchApp.fetch(...)`
+ *      한 줄이면 **줄 전체가 주석 취급**되어 그냥 통과한다.
+ *
+ * 보안 단언에서 과하게 지우는 건 위음성이라 최악이다. 그래서 대충 하지 않고
+ * 상태를 들고 한 글자씩 읽는다. 정규식 리터럴은 앞 토큰으로 구분한다 —
+ * 나눗셈과 헷갈리면 그 뒤가 통째로 밀리기 때문이다.
  */
-function codeLines(src, name) {
-  return src.split('\n')
-    .filter((l) => l.indexOf(name) !== -1)
-    .map((l) => l.trim())
-    .filter((l) => !/^(\/\/|\*|\/\*)/.test(l));
+function scan(src) {
+  let code = '';
+  const strings = [];
+  let i = 0, buf = null, quote = null, prev = '';
+  while (i < src.length) {
+    const c = src[i], next = src[i + 1];
+    if (quote) {
+      if (c === '\\') { buf += src.substr(i, 2); i += 2; continue; }
+      if (c === quote) { strings.push(buf); buf = null; quote = null; code += ' '; i++; continue; }
+      buf += c; i++; continue;
+    }
+    if (c === '/' && next === '/') { while (i < src.length && src[i] !== '\n') i++; continue; }
+    if (c === '/' && next === '*') {
+      i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++;
+      i += 2; code += ' '; continue;
+    }
+    // 정규식 리터럴. 값이 올 자리의 '/' 만 정규식이다.
+    if (c === '/' && /[(,=:[!&|?{};+\-*%~^]$/.test(prev.trim() || '=')) {
+      i++;
+      while (i < src.length && src[i] !== '/') {
+        if (src[i] === '\\') i++;
+        else if (src[i] === '[') { while (i < src.length && src[i] !== ']') { if (src[i] === '\\') i++; i++; } }
+        i++;
+      }
+      i++; code += ' '; continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { quote = c; buf = ''; i++; continue; }
+    code += c;
+    if (!/\s/.test(c)) prev = c;
+    i++;
+  }
+  return { code, strings };
 }
 
-/**
- * 주석 줄을 걷어낸 main.gs. 줄 단위라 문자열 안의 `//` 에 물리지 않는다.
- * (블록 주석 본문은 `*` 로 시작하므로 같이 걸린다.)
- */
-const CODE = SRC.split('\n')
-  .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-  .join('\n');
+const SCANNED = scan(SRC);
+/** 주석과 문자열을 지운 main.gs. 서비스 호출을 찾을 때 쓴다. */
+const CODE = SCANNED.code;
+/** main.gs 안의 모든 문자열 리터럴. 유저에게 보이는 문구가 여기 있다. */
+const STRINGS = SCANNED.strings;
 
 /** 실제로 유저 계정에서 도는 파일들. 개발용(probe·verify·template)은 뺀다. */
 const DEPLOYED = ['main.gs', 'core.gs', 'zipcrypto.gs', 'library-api.gs'];
@@ -74,8 +117,8 @@ test('배포되는 어떤 .gs 에도 외부 통신이 없다', () => {
   DEPLOYED.forEach((f) => {
     const p = path.join(ROOT, 'appsscript', f);
     if (!fs.existsSync(p)) return;
-    const hits = codeLines(fs.readFileSync(p, 'utf8'), 'UrlFetchApp');
-    assert.deepEqual(hits, [], f + ' 에서 UrlFetchApp: ' + hits.join(' | '));
+    const { code } = scan(fs.readFileSync(p, 'utf8'));
+    assert.doesNotMatch(code, /UrlFetchApp/, f + ' 에서 UrlFetchApp 호출이 나왔다');
   });
 });
 
@@ -98,10 +141,11 @@ test('매니페스트에 외부 통신 스코프가 없다', () => {
 test('versionText_ — 두 버전을 따로 보여준다', () => {
   // 라이브러리는 유저가 드롭다운으로 갈아끼울 수 있고, main.gs 는 시트 안에
   // 복사돼 있어 못 바꾼다. 하나로 합쳐 보여주면 옛 main.gs 로 도는 걸 감춘다.
-  const ctx = loadMain(lib('0.1.1'));
+  // 버전을 적어 넣지 않는다 — 올릴 때마다 깨지는 테스트는 아무도 안 고친다.
+  const ctx = loadMain(lib('9.9.9'));
   const t = ctx.versionText_();
-  assert.match(t, /시트 스크립트: 0\.1\.1/);
-  assert.match(t, /집계 라이브러리: 0\.1\.1/);
+  assert.match(t, new RegExp('시트 스크립트: ' + ctx.MAIN_VERSION.replace(/\./g, '\\.')));
+  assert.match(t, /집계 라이브러리: 9\.9\.9/);
 });
 
 test('versionText_ — 라이브러리를 못 찾아도 죽지 않는다', () => {
@@ -137,9 +181,12 @@ test('버전 안내가 설정을 날리라고 하지 않는다', () => {
 
 /** 오늘로부터 n일 전 'YYYY-MM-DD'. */
 function daysAgo(n) {
+  // ⚠️ toISOString() 을 쓰면 안 된다. UTC 로 찍힌 날짜를 dataAge_ 가 로컬로
+  //    읽어서, 한국 시간 새벽에 돌리면 하루가 어긋나 테스트가 깜빡인다.
   const d = new Date();
   d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
+  const p = (x) => String(x).padStart(2, '0');
+  return [d.getFullYear(), p(d.getMonth() + 1), p(d.getDate())].join('-');
 }
 
 function propsStub(map) {
@@ -168,14 +215,31 @@ test('freshnessLine_ — 최근이면 경고하지 않는다', () => {
   assert.match(line, /2일 전/);
 });
 
-test('dataAge_ — 깨진 값에 NaN 을 내보내지 않는다', () => {
+test('dataAge_ — 깨진 값을 "데이터 없음" 과 구분한다', () => {
+  // 뭉개면 이 함수가 드러내려는 고장을 그 자체로 감춘다.
   const ctx = loadMain({});
-  assert.equal(ctx.dataAge_(propsStub({ LAST_INGEST_DATE: '언젠가' })).days, null);
+  const broken = ctx.dataAge_(propsStub({ LAST_INGEST_DATE: '언젠가' }));
+  assert.equal(broken.state, 'broken');
+  assert.equal(broken.days, null);
+  assert.equal(ctx.dataAge_(propsStub({})).state, 'none');
+  assert.match(ctx.freshnessLine_(broken), /읽지 못했어요/);
+});
+
+test('lastIngest 에 메일 수신일이 아니라 거래 마지막 날을 적는다', () => {
+  // "데이터는 X 까지 있어요" 라고 말할 값이다. 수신일을 적으면 그 문장이
+  // 거짓이 된다 — 뱅샐이 어제까지만 담아 보낼 수 있다.
+  assert.match(CODE, /PROP\.lastIngest,\s*\(facts\.period && facts\.period\.to\)/);
+});
+
+test('상태 칸이 같은 문장을 두 번 쓰지 않는다', () => {
+  const body = fnBody(CODE, 'writeStatusToSheet_');
+  assert.equal((body.match(/freshnessLine_\(/g) || []).length, 1,
+    '신선도 문장을 B10 과 B11 에 겹쳐 적고 있다');
 });
 
 test('process_ 성공 경로가 마지막 수신일을 기록한다', () => {
   // 이걸 안 적으면 신선도를 계산할 근거가 없다.
-  assert.match(SRC, /props\.setProperty\(PROP\.lastIngest, stamp\)/);
+  assert.match(CODE, /props\.setProperty\(PROP\.lastIngest,/);
 });
 
 // ── 시트에 쓰는 값 ─────────────────────────────────────────────────
@@ -199,9 +263,10 @@ test('상태 칸이 템플릿과 main.gs 에서 같은 곳을 가리킨다', () 
   const status = cell(tpl, 'TEMPLATE_STATUS_CELL');
   const checked = cell(tpl, 'TEMPLATE_CHECKED_CELL');
   assert.ok(status && checked, 'template.gs 의 상태 칸 상수를 못 찾았다');
-  assert.match(CODE, new RegExp("getRange\\('" + status[1] + "'\\)"),
+  // 셀 주소는 문자열이라 CODE 에는 안 남는다. 원문에서 본다.
+  assert.match(SRC, new RegExp("getRange\\('" + status[1] + "'\\)"),
     'main.gs 가 ' + status[1] + ' 에 안 쓴다');
-  assert.match(CODE, new RegExp("getRange\\('" + checked[1] + "'\\)"),
+  assert.match(SRC, new RegExp("getRange\\('" + checked[1] + "'\\)"),
     'main.gs 가 ' + checked[1] + ' 에 안 쓴다');
 });
 
@@ -213,20 +278,30 @@ test('상태를 이름으로 찾은 시트에 쓴다', () => {
 // ── 비밀번호 힌트 ──────────────────────────────────────────────────
 
 test('hint_ — 별 개수가 자릿수와 맞는다', () => {
-  // 문서에 첫 글자·끝 글자·**자릿수**를 보여준다고 약속했다. 유저는 별을
+  // 문서에 첫 글자·끝 글자·자릿수를 보여준다고 약속했다. 유저는 별을
   // 세어서 비밀번호를 떠올리므로, 하나 어긋나면 틀린 길이로 입력한다.
   const { hint_ } = loadMain({});
-  ['abcd', '0930', 'a1b2c3d4', '가나다라마'].forEach((pw) => {
+  ['abcdef', 'a1b2c3d4', '가나다라마바사'].forEach((pw) => {
     assert.equal(hint_(pw).length, pw.length, pw + ' 의 힌트 길이');
   });
-  assert.equal(hint_('abcd'), 'a**d');
+  assert.equal(hint_('abcdef'), 'a****f');
 });
 
 test('hint_ — 짧은 비밀번호는 답을 흘리지 않는다', () => {
+  // '0930' → '0**0' 이면 후보가 100개로 준다. 힌트가 아니라 답이다.
   const { hint_ } = loadMain({});
-  ['a', 'ab'].forEach((pw) => {
-    assert.doesNotMatch(hint_(pw), new RegExp(pw), pw + ' 가 힌트에 그대로 보인다');
+  ['a', 'ab', 'abc', '0930', 'abcde'].forEach((pw) => {
+    const h = hint_(pw);
+    assert.doesNotMatch(h, new RegExp('[' + pw + ']'), pw + ' 의 글자가 힌트에 보인다');
+    assert.match(h, /^\d+자$/, pw + ' 는 자릿수만 알려야 한다');
   });
+});
+
+test('hint_ — 이모지를 반쪽으로 자르지 않는다', () => {
+  const { hint_ } = loadMain({});
+  const h = hint_('🔑abcde🔒');
+  assert.equal(Array.from(h).length, 7);
+  assert.equal(Array.from(h)[0], '🔑');
 });
 
 // ── 유저에게 보이는 문자열 ─────────────────────────────────────────
@@ -234,8 +309,7 @@ test('hint_ — 짧은 비밀번호는 답을 흘리지 않는다', () => {
 test('유저에게 보이는 문자열에 마크다운을 쓰지 않는다', () => {
   // ui.alert 는 평문만 렌더한다. **강조** 는 별표가 그대로 보인다.
   // 주석은 CODE 에서 이미 빠졌으므로 남은 건 진짜 문자열이다.
-  const literals = [...CODE.matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((m) => m[1]);
-  const bad = literals.filter((l) => l.indexOf('**') !== -1);
+  const bad = STRINGS.filter((l) => l.indexOf('**') !== -1);
   assert.deepEqual(bad, [], '별표가 그대로 보인다: ' + bad.join(' | '));
 });
 
@@ -244,9 +318,7 @@ test('유저에게 보이는 문자열에 마크다운을 쓰지 않는다', () 
 test('사람이 누르는 실행도 잠금을 잡는다', () => {
   // 아침 트리거와 겹치면 임시 시트가 둘, latest.json 쓰기가 둘이 되고
   // pruneFacts_ 가 서로가 쓰는 걸 지운다.
-  const i = CODE.indexOf('function menu_runNow');
-  assert.notEqual(i, -1);
-  const body = CODE.slice(i, i + 1400);
+  const body = fnBody(CODE, 'menu_runNow');
   assert.match(body, /LockService\.getScriptLock/);
   assert.match(body, /releaseLock/);
   assert.match(body, /catch/, '라이브러리를 못 찾으면 날 것의 TypeError 가 뜬다');
@@ -327,7 +399,11 @@ test('매니페스트에 코드가 안 쓰는 스코프가 없다', () => {
 test('install.md 스코프 표가 매니페스트와 정확히 같다', () => {
   // 유저에게 "정확히 말씀드릴게요" 라고 해놓은 표다. 어긋나면 그 문장이 거짓말이 된다.
   const md = fs.readFileSync(path.join(ROOT, 'docs', 'install.md'), 'utf8');
-  const rows = [...md.matchAll(/^\| `([a-z._]+)` \|/gm)].map((m) => m[1]);
+  // 문서 전체를 훑으면 무관한 표의 행까지 잡힌다. 그 표만 잘라서 본다.
+  const head = md.indexOf('| 스코프 | 실제로 할 수 있는 것 |');
+  assert.notEqual(head, -1, 'install.md 에서 스코프 표를 못 찾았다');
+  const table = md.slice(head, md.indexOf('\n\n', head));
+  const rows = [...table.matchAll(/^\| `([a-z._]+)` \|/gm)].map((m) => m[1]);
   const short = (MANIFEST.oauthScopes || []).map((s) => s.replace(/^.*\/auth\//, ''));
   assert.deepEqual(rows, short);
 });

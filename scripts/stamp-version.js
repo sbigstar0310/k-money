@@ -36,4 +36,15 @@ if (after === before && !before.includes("var MAIN_VERSION = '" + version + "'")
 }
 fs.writeFileSync(mainPath, after);
 
-console.log('v' + version + ' → VERSION, appsscript/main.gs');
+// README 는 유저에게 "최신은 저장소에서 보세요" 라고 안내하는 곳이다.
+// 저장소가 옛 번호를 들고 있으면 그 안내가 통째로 헛돈다.
+const readmePath = path.join(ROOT, 'README.md');
+const readme = fs.readFileSync(readmePath, 'utf8');
+const stamped = readme.replace(/현재 버전 \*\*[\d.]+\*\*/, '현재 버전 **' + version + '**');
+if (stamped === readme && !readme.includes('현재 버전 **' + version + '**')) {
+  console.error('README 의 버전 표기를 못 찾았다. 문구가 바뀌었나?');
+  process.exit(1);
+}
+fs.writeFileSync(readmePath, stamped);
+
+console.log('v' + version + ' → VERSION, appsscript/main.gs, README.md');

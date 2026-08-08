@@ -12,10 +12,14 @@
  *   2. zipcrypto.gs 의 unzipEncrypted
  *   3. 서비스에서 **Drive API(고급 서비스)** — xlsx → Sheets 변환용
  *
- * ━━ 유저는 이 파일을 열지 않는다 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ * ━━ 유저는 이 파일을 열 일이 없다 (읽을 수는 있다) ━━━━━━━━━━━━━
  *
- * 배포물은 스크립트가 바인딩된 Google Sheet 하나이고, 유저는 시트 메뉴
- * '💰 돈동생' 에서만 조작한다. Apps Script 편집기도 프로젝트 설정도 안 연다.
+ * 배포물은 스크립트가 바인딩된 Google Sheet 하나이고, 조작은 전부 시트 메뉴
+ * '💰 돈동생' 에서 한다. 설치에도 편집기가 필요 없다.
+ *
+ * 다만 **읽으러 오는 사람은 있다.** 문서에서 "Gmail 을 읽는 도구니 직접
+ * 확인해 보라" 고 안내한다. 그 사람이 처음 여는 파일이 이 파일이므로,
+ * 여기 주석은 개발 메모가 아니라 **설명**으로 쓴다.
  * 개발자용 함수(setup_check·runOnceForce)는 편집기에서만 쓴다.
  *
  * ━━ 비밀번호 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -92,6 +96,7 @@ var PROP = {
   passwordHint: 'BANKSALAD_ZIP_PASSWORD_HINT',
   // 마지막으로 **실제 데이터를 받은** 날. 마지막 실행 시각과 다르다 —
   // 내보내기를 그만둬도 실행은 매일 성공하기 때문이다. dataAge_() 참고.
+  // 값은 **거래의 마지막 날**이다 (메일 수신일이 아니다).
   lastIngest: 'LAST_INGEST_DATE',
 };
 
@@ -277,7 +282,11 @@ function process_(opts) {
   pruneFacts_(folder);
 
   markProcessed_(props, found.id);
-  props.setProperty(PROP.lastIngest, stamp);
+  // ⚠️ 메일 **수신일**(stamp)이 아니라 거래의 **마지막 날**을 적는다.
+  //    유저에게 "데이터는 X 까지 있어요" 라고 말할 참이라, 저장하는 값이
+  //    그 문장과 같은 것이어야 한다. 뱅샐이 어제까지만 담아 보냈는데
+  //    오늘 날짜를 적으면 그 한 줄이 거짓말이 된다.
+  props.setProperty(PROP.lastIngest, (facts.period && facts.period.to) || stamp);
 
   return {
     ok: true, step: 'done',
@@ -426,15 +435,28 @@ function writeStatus_(result) {
  */
 function dataAge_(props) {
   var last = props.getProperty(PROP.lastIngest);
-  if (!last) return { last: null, days: null };
-  var d = new Date(last + 'T00:00:00');
-  if (isNaN(d.getTime())) return { last: null, days: null };
-  return { last: last, days: Math.floor((new Date().getTime() - d.getTime()) / 86400000) };
+  if (!last) return { state: 'none', last: null, days: null };
+  // 깨진 값을 '아직 없음' 으로 뭉개면 안 된다. 이 함수가 드러내려는 고장을
+  // 그 자체로 감추게 된다. 상태를 따로 둔다.
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(last));
+  if (!m) return { state: 'broken', last: String(last).slice(0, 20), days: null };
+  var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  var today = new Date();
+  // 자정 기준으로 센다. 시각까지 넣으면 같은 날인데 0일/1일이 왔다 갔다 한다.
+  var midnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  return {
+    state: 'ok', last: last,
+    days: Math.round((midnight.getTime() - d.getTime()) / 86400000),
+  };
 }
 
 /** 신선도 한 줄. 오래됐으면 그 사실이 먼저 오게 한다. */
 function freshnessLine_(age) {
-  if (age.last === null) return '아직 받은 데이터가 없어요. 뱅크샐러드에서 내보내 주세요.';
+  if (age.state === 'none') return '아직 받은 데이터가 없어요. 뱅크샐러드에서 내보내 주세요.';
+  if (age.state === 'broken') {
+    return '⚠️ 데이터 날짜를 읽지 못했어요 (' + age.last + '). ' +
+      '한 번 더 내보내시면 다시 맞춰집니다.';
+  }
   if (age.days > CFG.staleDays) {
     return '⚠️ 데이터가 ' + age.last + ' 에서 멈춰 있어요 (' + age.days + '일 전). ' +
       '뱅크샐러드 앱에서 다시 내보내 주세요.';
@@ -455,27 +477,34 @@ function writeStatusToSheet_(result) {
     // 이름으로 먼저 찾는다. 유저가 시트를 하나 추가하면 [0] 은 남의 시트다.
     var sh = ss.getSheetByName(STATUS_SHEET) || ss.getSheets()[0];
     var age = dataAge_(PropertiesService.getScriptProperties());
+    var stale = age.state !== 'ok' || age.days > CFG.staleDays;
+    var fresh = freshnessLine_(age);
 
     // 데이터가 멈춰 있으면 그게 제일 중요한 소식이다. 실행 성공보다 앞에 온다.
-    var headline = age.days !== null && age.days > CFG.staleDays
-      ? freshnessLine_(age)
-      : (result.ok ? '✅ ' : '⚠️ ') + result.message;
-
-    // 앞에 '=' 가 오면 시트가 수식으로 읽는다. 우리 문자열은 항상 기호로
-    // 시작하지만, 메시지 출처가 늘어날 때를 대비해 여기서 한 번 막는다.
-    sh.getRange('B10').setValue(safeCell_(headline));
+    // 멈춘 게 아니면 굵은 칸은 실행 결과, 아랫줄이 신선도 — 같은 문장을
+    // 두 번 쓰지 않는다.
+    sh.getRange('B10').setValue(safeCell_(
+      stale ? fresh : (result.ok ? '✅ ' : '⚠️ ') + result.message));
     sh.getRange('B11').setValue(safeCell_(
-      freshnessLine_(age) + ' · 마지막 확인 ' +
-      Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')));
+      (stale ? (result.ok ? '✅ ' : '⚠️ ') + result.message : fresh) +
+      ' · 마지막 확인 ' + localTime_(new Date())));
   } catch (e) {
     // 시트에 안 붙어 있거나 권한이 없다. 상태는 이미 Drive 에 남았으니 넘어간다.
   }
 }
 
-/** 시트가 수식으로 해석하지 않게 한다. */
+/**
+ * 시트가 수식으로 해석하지 않게 한다.
+ * 앞 공백을 넘겨보면 안 된다 — 시트는 ' =IMPORTDATA(...)' 도 수식으로 읽는다.
+ */
 function safeCell_(s) {
   var t = String(s);
-  return /^[=+\-@]/.test(t) ? "'" + t : t;
+  return /^\s*[=+\-@]/.test(t) ? "'" + t : t;
+}
+
+/** 유저에게 보이는 시각은 늘 이 계정의 시간대로. */
+function localTime_(d) {
+  return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
 }
 
 
@@ -547,9 +576,12 @@ function promptPassword_(ui) {
  * 짧은 비밀번호는 힌트가 곧 답이 된다. 3자 미만이면 자릿수만 알려준다.
  */
 function hint_(pw) {
-  var n = pw.length;
-  if (n < 3) return n + '자';
-  return pw.charAt(0) + new Array(n - 1).join('*') + pw.charAt(n - 1);
+  // charAt 은 이모지를 반쪽으로 자른다. 글자 단위로 센다.
+  var ch = Array.from ? Array.from(pw) : String(pw).split('');
+  var n = ch.length;
+  // 짧으면 힌트가 곧 답이다. '0930' 은 '0**0' 이 되어 후보가 100개로 준다.
+  if (n < 6) return n + '자';
+  return ch[0] + new Array(n - 1).join('*') + ch[n - 1];
 }
 
 function menu_runNow() {
@@ -585,13 +617,15 @@ function menu_runNow() {
 function menu_status() {
   var ui = SpreadsheetApp.getUi();
   var props = PropertiesService.getScriptProperties();
-  var folder = ensureFolder_(DriveApp, CFG.folderName);
-  var s = readJson_(folder, 'status.json');
+  // 상태를 '보는' 동작이 폴더를 만들면 안 된다. 없으면 없는 대로 답한다.
+  var it = DriveApp.getFoldersByName(CFG.folderName);
+  var s = it.hasNext() ? readJson_(it.next(), 'status.json') : null;
   var hint = props.getProperty(PROP.passwordHint);
+  var at = s && s.at ? localTime_(new Date(s.at)) : null;
   ui.alert('상태',
     // 신선도가 먼저다. '마지막 실행' 은 내보내기를 그만둬도 매일 갱신된다.
     freshnessLine_(dataAge_(props)) + '\n\n' +
-    (s ? '마지막 실행 ' + s.at + '\n' + s.message : '아직 한 번도 돌지 않았습니다.') +
+    (s ? '마지막 실행 ' + at + '\n' + s.message : '아직 한 번도 돌지 않았습니다.') +
     (hint ? '\n\n비밀번호 힌트: ' + hint : ''),
     ui.ButtonSet.OK);
 }
