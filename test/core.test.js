@@ -43,8 +43,8 @@ test('이체는 수입에도 지출에도 들어가지 않는다 (실측 912만�
   const f = build([
     H.income('2025-01-01', 1000000),
     H.expense('2025-01-05', 200000),
-    H.transfer('2025-01-10', -500000, '성대규'),
-    H.transfer('2025-01-10', 500000, '성대규'),
+    H.transfer('2025-01-10', -500000, '홍길동'),
+    H.transfer('2025-01-10', 500000, '홍길동'),
   ]);
   assert.strictEqual(f.flow.income, 1000000);
   assert.strictEqual(f.flow.expense, 200000);
@@ -55,8 +55,8 @@ test('이체는 수입에도 지출에도 들어가지 않는다 (실측 912만�
 
 test('본인 계좌 간 이체는 순액이 0이 되어야 한다', () => {
   const f = build([
-    H.transfer('2025-01-10', -500000, '토뱅 성대규'),
-    H.transfer('2025-01-10', 500000, '성대규'),
+    H.transfer('2025-01-10', -500000, '토뱅 홍길동'),
+    H.transfer('2025-01-10', 500000, '홍길동'),
   ]);
   assert.strictEqual(f.transfers.self.net, 0);
   assert.strictEqual(f.transfers.external.net, 0);
@@ -75,8 +75,8 @@ test('순액 0이어도 총액이 크면 미분류가 숨어 있다 — gross �
   assert.ok(codes.includes('unclassifiedExternalTransfers'), '순액이 0이어도 플래그가 서야 한다');
 });
 
-test('구두점이 붙은 본인 이름도 본인으로 본다 — "토스 성대규/" (실측 494,000원)', () => {
-  const f = build([H.transfer('2025-01-10', -444000, '토스 성대규/')]);
+test('구두점이 붙은 본인 이름도 본인으로 본다 — "토스 홍길동/" (실측 494,000원)', () => {
+  const f = build([H.transfer('2025-01-10', -444000, '토스 홍길동/')]);
   assert.strictEqual(f.transfers.self.net, -444000);
   assert.strictEqual(f.transfers.external.count, 0);
 });
@@ -87,17 +87,17 @@ test('이름이 통째로 가려진 "***" 는 본인이 아니다 — 아무나 
   assert.strictEqual(f.transfers.external.net, 500000);
 });
 
-test('부분 문자열은 본인이 아니다 — "성대규한국과학기술원" (실측 50,000원 오분류)', () => {
+test('부분 문자열은 본인이 아니다 — "홍길동한국과학기술원" (실측 50,000원 오분류)', () => {
   const f = build([
-    H.transfer('2025-01-10', -50000, '성대규한국과학기술원'),
-    H.transfer('2025-01-11', -30000, '박성대규'),
+    H.transfer('2025-01-10', -50000, '홍길동한국과학기술원'),
+    H.transfer('2025-01-11', -30000, '박홍길동'),
   ]);
   assert.strictEqual(f.transfers.self.count, 0, '내 이름이 들어있다고 내 계좌가 아니다');
   assert.strictEqual(f.transfers.external.net, -80000);
 });
 
 test('가려진 이름으로 본인 판정된 건은 불확실성으로 표시한다', () => {
-  const f = build([H.transfer('2025-01-10', -100000, '성*규')]);
+  const f = build([H.transfer('2025-01-10', -100000, '홍*동')]);
   assert.strictEqual(f.transfers.self.count, 1, '마스킹은 본인일 가능성이 높으니 채택하되');
   assert.strictEqual(f.transfers.self.matchedByMaskedName, 1, '동명이인일 수 있음을 밝힌다');
   const codes = f.dataQuality.flags.map((x) => x.code);
@@ -131,8 +131,8 @@ test('이체만 있는 달은 관측 개월에 넣지 않는다 (합성에서 �
   // 4~12월은 이체만 오갔다 — 지출 관측은 여전히 3개월이다
   for (let m = 4; m <= 12; m++) {
     const mm = String(m).padStart(2, '0');
-    txns.push(H.transfer('2025-' + mm + '-10', 100000, '성대규'));
-    txns.push(H.transfer('2025-' + mm + '-11', -100000, '성대규'));
+    txns.push(H.transfer('2025-' + mm + '-10', 100000, '홍길동'));
+    txns.push(H.transfer('2025-' + mm + '-11', -100000, '홍길동'));
   }
   const f = build(txns);
   assert.strictEqual(f.flow.monthly.length, 3, '이체만 있는 달은 월 행조차 만들지 않는다');
@@ -446,7 +446,7 @@ test('pace 는 남과 오간 이체만 더한다 — 여섯 공식 중 하나만
     H.income('2025-01-01', 1000000),
     H.expense('2025-01-15', 3000000),
     H.transfer('2025-01-10', 2500000, '회사'),     // 남 → 더한다
-    H.transfer('2025-01-20', 400000, '성대규'),    // 본인 → 안 더한다
+    H.transfer('2025-01-20', 400000, '홍길동'),    // 본인 → 안 더한다
   ], { assets: [{ group: '자유입출금 자산', name: '통장', amount: 5000000 }] });
 
   // (1,000,000 − 3,000,000 + 2,500,000) = +500,000. 관측 1개월 미만은 1개월로 본다.

@@ -513,7 +513,7 @@ function menu_status() {
 // 돈다. 그래서 가져오는 건 텍스트 한 줄이고, 갱신은 유저가 라이브러리
 // 버전을 바꿔서 한다 — **매 갱신마다 명시적 동의가 일어난다.**
 
-var VERSION_URL = 'https://raw.githubusercontent.com/sbigstar/k-money/main/VERSION';
+var VERSION_URL = 'https://raw.githubusercontent.com/sbigstar0310/k-money/main/VERSION';
 
 function menu_checkUpdate() {
   var ui = SpreadsheetApp.getUi();

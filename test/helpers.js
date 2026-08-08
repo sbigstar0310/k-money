@@ -77,7 +77,7 @@ function statusSheet(opts) {
 
   rows.push(['', '1.고객정보']);
   rows.push([null, '이름', '성별', '연령', '신용점수']);
-  rows.push([null, o.owner || '성대규', '남', o.age === undefined ? 25 : o.age, 750]);
+  rows.push([null, o.owner || '홍길동', '남', o.age === undefined ? 25 : o.age, 750]);
   rows.push(row(2));
 
   rows.push([null, '3.재무현황']);
