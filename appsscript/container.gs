@@ -38,7 +38,7 @@
  * 이 파일의 버전. **라이브러리 버전과 다른 값이다.**
  * VERSION 파일과 같아야 한다 — test/container.test.js 가 강제한다.
  */
-var CONTAINER_VERSION = '0.3.0';
+var CONTAINER_VERSION = '0.4.0';
 
 /**
  * 라이브러리를 어디서 찾을지.
