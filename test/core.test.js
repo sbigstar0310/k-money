@@ -520,23 +520,53 @@ test('generatedFor 는 데이터의 마지막 날이다 — 메일 받은 날이
 // ── 델타 ───────────────────────────────────────────────────────────
 
 test('delta 는 잘린 목록으로 "새 구독" 을 판정하지 않는다', () => {
-  // 예전엔 상한(12) 밖에 있던 항목이 안으로 들어오면 없던 구독이 생긴 것으로
-  // 보고됐다. delta 는 내보낸 창 밖을 보존하는 유일한 수단이라 검증이 안 된다.
+  // ⚠️ 같은 스냅샷끼리 비교하면 **옛 구현도 [] 를 준다.** 그래서 이 테스트는
+  //    한동안 헛돌았다. 진짜로 가르는 건 **상한 경계를 넘어 들어온 항목**이다.
+  //    값이 올라 순위가 12위 밖에서 안으로 들어오면, 옛 구현은 그걸
+  //    '없던 구독이 생겼다' 로 보고했다.
   const KMl = H.loadCore();
-  const many = [];
-  for (let i = 0; i < 14; i++) {
+  const twelve = (desc, amount) => {
+    const out = [];
     for (let m = 1; m <= 12; m++) {
-      const mm = String(m).padStart(2, '0');
-      many.push(H.expense('2025-' + mm + '-10', 10000 + i * 1000, { desc: '구독' + i }));
+      out.push(H.expense('2025-' + String(m).padStart(2, '0') + '-10', amount, { desc }));
     }
-  }
-  const snap = KMl.aggregate.build(KMl.parse.extract(H.sheets(many)));
-  assert.ok(snap.recurring.activeKeys.length > snap.recurring.items.length,
-    '잘린 목록보다 키가 많아야 이 테스트가 의미 있다');
+    return out;
+  };
+  let base = [];
+  for (let i = 0; i < 13; i++) base = base.concat(twelve('구독' + i, 50000));
 
-  // 같은 데이터를 다시 넣으면 새 구독은 하나도 없어야 한다.
-  const d = KMl.aggregate.delta(snap, snap);
-  assert.deepEqual(d.newRecurring, [], '같은 데이터인데 새 구독이 나왔다');
+  const before = KMl.aggregate.build(KMl.parse.extract(H.sheets(base.concat(twelve('값오른구독', 3000)))));
+  const after = KMl.aggregate.build(KMl.parse.extract(H.sheets(base.concat(twelve('값오른구독', 99000)))));
+
+  // 전제: 싼 동안엔 목록 밖, 비싸지면 목록 안 — 그래야 이 테스트가 의미 있다.
+  const shown = (f) => f.recurring.items.map((r) => r.label);
+  assert.ok(!shown(before).includes('값오른구독'), '싼 동안 목록 안에 있으면 이 테스트는 무의미하다');
+  assert.ok(shown(after).includes('값오른구독'), '비싸진 뒤엔 목록 안에 있어야 한다');
+
+  const d = KMl.aggregate.delta(after, before);
+  assert.deepEqual(d.newRecurring, [], '값이 올랐을 뿐인데 새 구독으로 보고했다');
+});
+
+test('delta — 상한 밖의 새 항목도 label 을 준다', () => {
+  // 새로 생긴 **싼** 구독은 정확히 items 상한 밖에 있다. label 없이 내보내면
+  // 같은 배열 안에서 모양이 갈리고, hints 는 label 을 보라고 한다.
+  const KMl = H.loadCore();
+  const twelve = (desc, amount) => {
+    const out = [];
+    for (let m = 1; m <= 12; m++) {
+      out.push(H.expense('2025-' + String(m).padStart(2, '0') + '-10', amount, { desc }));
+    }
+    return out;
+  };
+  let base = [];
+  for (let i = 0; i < 13; i++) base = base.concat(twelve('구독' + i, 50000));
+  const before = KMl.aggregate.build(KMl.parse.extract(H.sheets(base)));
+  const after = KMl.aggregate.build(KMl.parse.extract(H.sheets(base.concat(twelve('싼새구독', 900)))));
+
+  const d = KMl.aggregate.delta(after, before);
+  assert.equal(d.newRecurring.length, 1);
+  assert.equal(d.newRecurring[0].label, '싼새구독', '실제로는 ' + JSON.stringify(d.newRecurring[0]));
+  assert.equal(d.newRecurring[0].monthlyMedianOmitted, 'truncated');
 });
 
 test('delta — 진짜 새 항목은 잡는다', () => {
@@ -561,6 +591,67 @@ test('delta — 예전 스냅샷이 낡았으면 지어내지 않는다', () => 
   const d = KMl.aggregate.delta(cur, old);
   assert.strictEqual(d.newRecurring, undefined);
   assert.strictEqual(d.newRecurringOmitted, 'previousSnapshotTooOld');
+});
+
+test('긴 공백은 채우지 않고 밝힌다 — 산출물이 부풀면 안 된다', () => {
+  // 2019년에 쓰다 그만두고 2026년에 다시 시작한 사람. 다 채우면 92행이 되고
+  // 커넥터 한도를 넘는다 (실측 12,831 bytes, 그중 78행이 채운 것).
+  const f = build([
+    H.expense('2019-03-10', 100000),
+    H.expense('2019-05-10', 100000),
+    H.expense('2026-06-10', 100000),
+  ]);
+  assert.ok(f.flow.monthly.length < 10, '실제로는 ' + f.flow.monthly.length + '행');
+  assert.ok(JSON.stringify(f).length < 6000, '실제로는 ' + JSON.stringify(f).length + ' bytes');
+  assert.ok(f.flow.gaps && f.flow.gaps.length, '건너뛴 구간을 안 밝혔다');
+  assert.equal(f.flow.gaps[0].from, '2019-06');
+  assert.ok(f.flow.gaps[0].months > 60);
+  // 짧은 공백(2019-04)은 여전히 채운다.
+  assert.ok(f.flow.monthly.some((r) => r.month === '2019-04' && r.noTransactions));
+});
+
+test('짧은 관측에 급증을 만들어내지 않는다', () => {
+  // 0채움이 들어온 뒤로 spikes 의 관측월 가드가 죽어 있었다 — rows.length 가
+  // 채운 달까지 세니까. **채운 달이 문턱을 넘겨주는 모양**이라야 판별이 된다:
+  // 실제 3개월(1·4·7월)인데 사이를 채워 7행 → 옛 가드(7≥6)는 통과시킨다.
+  const txns = ['01', '04', '07'].map((m) =>
+    H.expense('2026-' + m + '-10', 300000, { major: '식비' }));
+  txns.push(H.expense('2026-07-20', 9000000, { major: '쇼핑' }));
+  const f = build(txns);
+
+  assert.ok(f.flow.monthly.length >= 6, '전제: 채운 뒤 행이 문턱을 넘어야 한다');
+  assert.equal(f.flow.monthly.filter((r) => !r.noTransactions).length, 3, '전제: 실제는 3개월');
+  assert.deepEqual(f.spikes, [], '중앙값을 낼 만큼 안 봤는데 급증을 냈다');
+});
+
+test('이체만 있으면 월평균 지출을 0으로 내지 않는다', () => {
+  // "366일 관측, 월평균 지출 0" 을 읽으면 '안 쓰는 사람' 이 된다.
+  const f = build([
+    H.transfer('2025-01-01', -100000, '남'),
+    H.transfer('2026-01-01', 100000, '남'),
+  ]);
+  assert.strictEqual(f.period.flowOmitted, 'noNonTransferTransactions');
+  assert.strictEqual(f.flow.avgMonthlyExpense, undefined, '없으면 인용될 수 없다');
+});
+
+test('generatedFor 와 title 은 흐름 창의 끝을 쓴다', () => {
+  // period.to 를 쓰면 1년 전 이체 하나 때문에 "50일치" 라고 말하게 된다.
+  const f = build([
+    H.income('2026-06-01', 1000000),
+    H.expense('2026-06-02', 5000),
+    H.transfer('2026-07-20', -1000, '남'),
+  ]);
+  assert.strictEqual(f.generatedFor, '2026-06-02');
+  assert.match(f.title, /2026-06-01 ~ 2026-06-02/);
+});
+
+test('가려진 이름과 온전한 이름이 같이 있으면 masked 를 켜지 않는다', () => {
+  const f = build([
+    H.income('2025-01-01', 1000000),
+    H.transfer('2025-01-10', -100000, '홍*동님 홍길동'),
+  ]);
+  assert.strictEqual(f.transfers.self.matchedByMaskedName, 0,
+    '온전한 일치가 있는데 동명이인 경고를 세웠다');
 });
 
 // ── 빌드 산물 ──────────────────────────────────────────────────────

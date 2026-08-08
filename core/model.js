@@ -100,9 +100,11 @@ KM.model = (function () {
     // 본인 판정에서 빠지고, 그러면 본인 이체가 남과의 이체로 잡혀
     // pace 에 없는 돈으로 더해진다. 접미사만 떼고 원본도 함께 본다.
     // '홍길동님전자' 처럼 뒤에 더 붙은 건 떼도 길이가 안 맞아 여전히 걸러진다.
-    var candidates = [];
+    // ⚠️ **원본을 전부 먼저 본 뒤에 접미사를 뗀 것을 본다.** 섞어 넣으면
+    //    '홍*동님 홍길동' 에서 가려진 쪽이 먼저 걸려 masked 가 켜지고,
+    //    '동명이인일 수 있다' 플래그가 헛되이 선다.
+    var candidates = tokens.slice();
     for (var t = 0; t < tokens.length; t++) {
-      candidates.push(tokens[t]);
       var stripped = tokens[t].replace(/(님|씨)$/, '');
       if (stripped !== tokens[t] && stripped) candidates.push(stripped);
     }

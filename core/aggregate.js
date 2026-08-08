@@ -97,9 +97,14 @@ KM.aggregate = (function () {
       //    뱅샐이 어제까지만 담아 보내면 그 둘이 다르고, delta.since 가
       //    그걸 물려받아 "언제부터의 변화인지" 가 하루씩 어긋났다.
       //    메일 받은 날은 별도 필드로 남긴다.
-      generatedFor: (period(txns) || {}).to
-                    || opts.asOf
-                    || (monthly.length ? monthly[monthly.length - 1].month : null),
+      // ⚠️ **흐름 창의 끝**이다. period.to 는 이체까지 포함해서, 1년 전
+      //    이체 하나가 있으면 "2026-07-20 까지 정리했어요 (50일치)" 인데
+      //    실제 수입·지출은 이틀치인 상황이 나온다.
+      generatedFor: (function () {
+        var p = period(txns) || {};
+        return p.flowTo || p.to || opts.asOf
+          || (monthly.length ? monthly[monthly.length - 1].month : null);
+      })(),
       period: period(txns),
 
       flow: {
@@ -147,6 +152,10 @@ KM.aggregate = (function () {
     //    "커피값에 민감함" 같은 걸 담지 못하고 유저를 좁히기만 한다.
     //    목표를 숫자로 바꾸는 것도, 모순을 정리하는 것도 AI 일이다.
 
+    // 채우지 않고 건너뛴 구간. 안 밝히면 소비자가 2월 다음이 9월인 걸 못 본다.
+    var gaps = A.monthGaps(monthly);
+    if (gaps.length) out.flow.gaps = gaps;
+
     out.dataQuality = quality(tb, extract, material, out.pace);
 
     // 못 믿을 값은 키를 만들지 않는다. null 이면 인용되고, 없으면 인용될 수 없다.
@@ -185,6 +194,9 @@ KM.aggregate = (function () {
     //    설치 첫날 며칠치만 들어오면 pace.monthly 가 월 292만, 비상금이
     //    35.5개월치로 나온다. 플래그도 없다. 그 숫자를 보고 안심하는 게
     //    이 도구가 할 수 있는 최악의 일이다.
+    // 흐름이 한 건도 없으면 월평균은 0이 아니라 '없음' 이다.
+    if (out.period && out.period.flowOmitted) delete out.flow.avgMonthlyExpense;
+
     if (out.pace && out.pace.observedMonths < MIN_MONTHS) {
       out.pace.monthlyOmitted = 'shortObservation';
       delete out.pace.monthly;
@@ -204,7 +216,9 @@ KM.aggregate = (function () {
 
   function title(txns) {
     var p = period(txns);
-    return p ? '돈동생 가계 요약 · ' + p.from + ' ~ ' + p.to : '돈동생 가계 요약';
+    if (!p) return '돈동생 가계 요약';
+    // 흐름 창을 쓴다 — 이체만 오간 구간까지 제목에 넣으면 실제보다 길어 보인다.
+    return '돈동생 가계 요약 · ' + (p.flowFrom || p.from) + ' ~ ' + (p.flowTo || p.to);
   }
 
   /**
@@ -232,6 +246,11 @@ KM.aggregate = (function () {
         out.flowNote = '수입·지출 지표(pace·avgMonthlyExpense·monthly)는 이 창을 쓴다. ' +
           'period 의 from·to 는 이체까지 포함한 전체 범위다';
       }
+    } else {
+      // ⚠️ 창이 100% 어긋난 경우인데 여기만 라벨이 없었다. 소비자는
+      //    "366일 관측, 월평균 지출 0" 을 읽고 '안 쓰는 사람' 으로 결론낸다.
+      out.flowOmitted = 'noNonTransferTransactions';
+      out.flowNote = '이체 말고는 거래가 없다. period 의 날짜는 이체만의 범위다';
     }
     return out;
   }
@@ -550,6 +569,7 @@ KM.aggregate = (function () {
     transfers: '이체는 수입에도 지출에도 포함되지 않는다. 본인 계좌 간 이동이므로 self.net 은 0에 가까워야 한다.',
     pace: 'pace.monthly = (수입 − 지출 + 남과 오간 이체 순액) ÷ 관측개월. 본인 계좌 간 이체 순액은 더하지 않는다 — 새로 생긴 돈이 아니다. 이 값을 직접 다시 유도하지 마라.',
     derived: '합계·차액·비율·연환산은 여기 있는 숫자로 계산해 써라. 다만 pace 와 avgMonthlyExpense 는 이미 보정된 값이니 그대로 쓴다.',
+    period: 'period.from·to 는 이체까지 포함한 전체 범위다. flowFrom·flowTo·flowDays 가 있으면 수입·지출 지표는 그 좁은 창을 쓴 것이다 — 지출을 period.days 로 나누지 마라. flow.gaps 는 거래가 아예 없어 건너뛴 구간이다.',
     truncation: 'otherTotal·otherAccountsTotal·external.other 는 목록에서 잘려나간 나머지다. 합계를 검산할 때 같이 더해라.',
     recurring: 'recurring 은 금액이 일정한 모든 지출을 잡는다 — 월세·식비도 들어간다. items 의 label 을 보고 구독과 생활비를 구분해라.',
     // ⚠️ 여기에 금액을 적지 마라. goalTable(5천만·1억·2억)을 '우리가 고른
@@ -573,7 +593,9 @@ KM.aggregate = (function () {
       d.netWorth = current.balance.netWorth - previous.balance.netWorth;
     }
     if (current.cash && previous.cash) d.cash = current.cash.total - previous.cash.total;
-    if (current.flow && previous.flow) {
+    // 한쪽이라도 shortObservation 으로 빠졌으면 뺄셈이 NaN 이고 JSON 에서 null 이 된다.
+    if (typeof (current.flow || {}).avgMonthlyExpense === 'number' &&
+        typeof (previous.flow || {}).avgMonthlyExpense === 'number') {
       d.avgMonthlyExpense = current.flow.avgMonthlyExpense - previous.flow.avgMonthlyExpense;
     }
     // ⚠️ **잘린 목록으로 '새로 생겼나' 를 판정하면 안 된다.** 예전에는
@@ -595,8 +617,14 @@ KM.aggregate = (function () {
           .map(function (k) {
             var hit = null;
             current.recurring.items.forEach(function (r) { if (r.key === k) hit = r; });
-            return hit ? { label: hit.label, monthlyMedian: hit.monthlyMedian }
-                       : { key: k };
+            if (hit) return { key: k, label: hit.label, monthlyMedian: hit.monthlyMedian };
+            // ⚠️ 상한 밖이라 items 에 없다. **새로 생긴 싼 구독이 정확히
+            //    이 경우다.** label 없이 내보내면 같은 배열 안에서 모양이
+            //    갈리고, hints 는 "label 을 보고 구분하라" 고 한다.
+            //    키는 '대분류|소분류|설명' 이라 마지막 조각이 label 이다.
+            var parts = String(k).split('|');
+            return { key: k, label: parts[parts.length - 1] || k,
+                     monthlyMedianOmitted: 'truncated' };
           });
       } else {
         // 예전 스냅샷이 activeKeys 를 안 갖고 있다 (0.4.x 이전). 지어내지 않는다.

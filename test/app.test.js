@@ -386,10 +386,10 @@ test('process — 끝까지 돌면 최신본과 원본 zip 이 남는다', () =>
 
   const folder = env._root.getFoldersByName(A.CFG.folderName).next();
   assert.ok(folder._files.has(A.CFG.latestName), A.CFG.latestName + ' 이 없다');
-  // ⚠️ 히스토리 이름은 **데이터의 마지막 날**(6/10)이다. 메일 받은 날(6/11)이
-  //    아니다 — 그러면 readPrevious 의 비교 기준과 어긋나 자기 자신과 비교한다.
-  assert.ok(folder._files.has(A.historyName('2026-06-10')),
-    '히스토리 이름이 데이터 날짜가 아니다: ' + [...folder._files.keys()].join(', '));
+  // ⚠️ 히스토리 이름은 **받은 날**(6/11)이다. 데이터 날짜로 지으면 매일
+  //    거래하지 않는 사람은 파일이 한 개만 남고 delta 가 영영 안 나온다.
+  assert.ok(folder._files.has(A.historyName('2026-06-11')),
+    '히스토리 이름이 받은 날이 아니다: ' + [...folder._files.keys()].join(', '));
   const raw = folder.getFoldersByName('raw').next();
   // 원본 zip 은 메일 받은 날로 남긴다 — 언제 받은 파일인지가 여기선 중요하다.
   assert.ok(raw._files.has('2026-06-11.zip'), '원본 zip 을 안 남겼다');
@@ -453,6 +453,73 @@ test('runForced 는 이미 처리한 메일도 다시 본다', () => {
   });
   assert.equal(A.runDaily(env).step, 'idle', '평소엔 건너뛴다');
   assert.equal(A.runForced(env).step, 'decrypt', 'force 면 다시 본다');
+});
+
+test('매일 거래하지 않아도 스냅샷이 쌓이고 delta 가 나온다', () => {
+  // ⚠️ 한때 히스토리 이름을 **데이터 마지막 날**로 지었다. 그러면 거래가
+  //    없는 날에는 이름이 안 바뀌어 매 실행이 같은 파일을 덮어쓰고,
+  //    readPrevious 가 자기보다 앞선 걸 못 찾아 delta 가 영영 안 나왔다.
+  //    실측: 순자산이 120만원 움직였는데 보고 0건, 히스토리 1개.
+  const sheets = (netWorth) => ({
+    '가계부 내역': H.ledgerSheet([{ day: '2026-06-02', kind: '지출', amount: -1000 }]),
+    '뱅샐현황': H.statusSheet({
+      owner: '홍길동',
+      assets: [{ group: '자유입출금 자산', name: '통장', amount: netWorth }],
+    }),
+  });
+  const A = loadApp({ unzipEncrypted: () => [fakeBlob('가계부.xlsx', 'x')] });
+  const env = fakeEnv({ props: propsStub({ BANKSALAD_ZIP_PASSWORD: '0930' }) });
+
+  const run = (mailDay, netWorth) => {
+    const cur = sheets(netWorth);
+    env.gmail = { search: () => [{ getMessages: () => [fakeMessage('m' + mailDay, new Date(mailDay + 'T09:00:00'), 'a.zip')] }] };
+    env.sheets = {
+      openById: () => ({
+        getSheets: () => Object.keys(cur).map((n) => ({
+          getName: () => n,
+          getDataRange: () => ({ getValues: () => cur[n] }),
+        })),
+      }),
+    };
+    return A.process(env, { force: true });
+  };
+
+  run('2026-06-03', 10000000);
+  run('2026-06-04', 10800000);
+  const folder = env._root.getFoldersByName(A.CFG.folderName).next();
+  const history = [...folder._files.keys()].filter((n) => A.CFG.historyPattern.test(n));
+  assert.equal(history.length, 2, '스냅샷이 안 쌓인다: ' + history.join(', '));
+
+  const latest = JSON.parse(folder._files.get(A.CFG.latestName).getBlob().getDataAsString());
+  assert.ok(latest.delta, 'delta 가 안 나왔다');
+  assert.equal(latest.delta.netWorth, 800000);
+});
+
+test('readPrevious 의 비교 기준이 쓰는 기준과 같다', () => {
+  // 두 기준이 어긋나면 자기 자신과 비교해 delta 가 전부 0이 되거나 사라진다.
+  const A = loadApp();
+  const src = fs.readFileSync(path.join(ROOT, 'appsscript', 'app.gs'), 'utf8');
+  assert.match(src, /readPrevious\(folder, stamp\)/, '비교 기준이 stamp 가 아니다');
+  assert.match(src, /putJson\(folder, historyName\(stamp\), json\)/, '쓰는 기준이 stamp 가 아니다');
+});
+
+test('임시 시트는 집계가 던져도 치운다', () => {
+  // 이 정리가 refactor 의 존재 이유인데 테스트가 없었다 — finally 를 통째로
+  // 지워도 스위트가 초록이었다.
+  const trashed = [];
+  const A = loadApp({
+    unzipEncrypted: () => [fakeBlob('가계부.xlsx', 'x')],
+  });
+  const env = fakeEnv({
+    props: propsStub({ BANKSALAD_ZIP_PASSWORD: '0930' }),
+    gmail: { search: () => [{ getMessages: () => [fakeMessage('m', new Date('2026-06-11'), 'a.zip')] }] },
+    driveApi: { Files: { create: () => ({ id: 'tmp-1' }) } },
+    sheets: { openById() { throw new Error('시트 읽기 폭발'); } },
+  });
+  env.drive.getFileById = (id) => ({ setTrashed: () => trashed.push(id) });
+
+  assert.throws(() => A.process(env, { force: true }), /시트 읽기 폭발/);
+  assert.deepEqual(trashed, ['tmp-1'], '임시 시트가 남았다');
 });
 
 test('runDaily — 이미 돌고 있으면 건너뛴다', () => {

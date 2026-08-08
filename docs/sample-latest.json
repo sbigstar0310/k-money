@@ -609,6 +609,7 @@
     "transfers": "이체는 수입에도 지출에도 포함되지 않는다. 본인 계좌 간 이동이므로 self.net 은 0에 가까워야 한다.",
     "pace": "pace.monthly = (수입 − 지출 + 남과 오간 이체 순액) ÷ 관측개월. 본인 계좌 간 이체 순액은 더하지 않는다 — 새로 생긴 돈이 아니다. 이 값을 직접 다시 유도하지 마라.",
     "derived": "합계·차액·비율·연환산은 여기 있는 숫자로 계산해 써라. 다만 pace 와 avgMonthlyExpense 는 이미 보정된 값이니 그대로 쓴다.",
+    "period": "period.from·to 는 이체까지 포함한 전체 범위다. flowFrom·flowTo·flowDays 가 있으면 수입·지출 지표는 그 좁은 창을 쓴 것이다 — 지출을 period.days 로 나누지 마라. flow.gaps 는 거래가 아예 없어 건너뛴 구간이다.",
     "truncation": "otherTotal·otherAccountsTotal·external.other 는 목록에서 잘려나간 나머지다. 합계를 검산할 때 같이 더해라.",
     "recurring": "recurring 은 금액이 일정한 모든 지출을 잡는다 — 월세·식비도 들어간다. items 의 label 을 보고 구독과 생활비를 구분해라.",
     "goals": "목표 금액은 유저가 정한다. 우리가 예시 금액을 먼저 던지지 않는다. 유저에 대해 알게 된 것은 같은 폴더의 메모리/ 에 있다 — AGENT.md 를 읽어라.",

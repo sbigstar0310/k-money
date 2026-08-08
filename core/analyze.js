@@ -85,15 +85,43 @@ KM.analyze = (function () {
     //
     //    양끝은 늘리지 않는다. 관측이 시작되기 전과 끝난 뒤는 '안 썼다' 가
     //    아니라 '모른다' 다.
-    return monthRange(seen[0], seen[seen.length - 1]).map(function (m) {
-      var r = acc[m];
-      if (!r) {
-        // 진짜 0 과 구분한다. 소비자가 "이 달은 왜 0이지" 를 물을 수 있어야 한다.
-        return { month: m, income: 0, expense: 0, net: 0, noTransactions: true };
+    // ⚠️ **긴 공백은 채우지 않는다.** 2019년에 쓰다 그만두고 2026년에
+    //    다시 시작한 사람은 채우면 92행이 되고 산출물이 커넥터 한도를
+    //    넘는다 (실측 12,831 bytes, 그중 78행이 채운 것). 한두 달 빈
+    //    것과 몇 년 쉰 것은 다른 얘기다.
+    var out = [];
+    for (var k = 0; k < seen.length; k++) {
+      var cur = seen[k];
+      if (k > 0) {
+        var gap = monthRange(seen[k - 1], cur);
+        gap = gap.slice(1, gap.length - 1);   // 양끝은 실제 달
+        if (gap.length <= MAX_GAP_FILL) {
+          for (var g = 0; g < gap.length; g++) {
+            // 진짜 0 과 구분한다. 소비자가 "이 달은 왜 0이지" 를 물을 수 있어야 한다.
+            out.push({ month: gap[g], income: 0, expense: 0, net: 0, noTransactions: true });
+          }
+        }
       }
+      var r = acc[cur];
       r.net = r.income - r.expense;
-      return r;
-    });
+      out.push(r);
+    }
+    return out;
+  }
+
+  /** 이보다 긴 공백은 채우는 대신 flow.gaps 로 알린다. */
+  var MAX_GAP_FILL = 2;
+
+  /** 채우지 않고 건너뛴 구간. 소비자가 '없는 달' 을 눈치채야 한다. */
+  function monthGaps(rows) {
+    var out = [];
+    for (var i = 1; i < rows.length; i++) {
+      var span = monthRange(rows[i - 1].month, rows[i].month);
+      if (span.length > 2) {
+        out.push({ from: span[1], to: span[span.length - 2], months: span.length - 2 });
+      }
+    }
+    return out;
   }
 
   function totals(txns) {
@@ -307,7 +335,12 @@ KM.analyze = (function () {
     var minMonths = opts.minMonths || 6;
 
     var rows = monthlyTotals(txns);
-    if (rows.length < minMonths) return [];
+    // ⚠️ **채운 달은 세지 않는다.** 0채움이 들어온 뒤로 rows.length 는 늘
+    //    전체 개월과 같아져서 이 가드가 죽어 있었다. 실측: 관측 3개월짜리에
+    //    급증이 잡혀 baseline 0 · ratio null 이 나갔다.
+    var realMonths = 0;
+    for (var rm = 0; rm < rows.length; rm++) if (!rows[rm].noTransactions) realMonths++;
+    if (realMonths < minMonths) return [];
     var allMonths = monthRange(rows[0].month, rows[rows.length - 1].month);
     if (allMonths.length < minMonths) return [];
 
@@ -439,7 +472,7 @@ KM.analyze = (function () {
   return {
     median: median, monthIndex: monthIndex, monthRange: monthRange, dayDiff: dayDiff,
     monthlyTotals: monthlyTotals, totals: totals, avgMonthlyExpense: avgMonthlyExpense,
-    observedMonths: observedMonths,
+    observedMonths: observedMonths, monthGaps: monthGaps,
     transferBalance: transferBalance, recurring: recurring, spikes: spikes,
     byCategory: byCategory, categoryByMonth: categoryByMonth,
     byMerchant: byMerchant, pace: pace, refunds: refunds,
