@@ -239,14 +239,15 @@
 | `docs/positioning.md` | ✅ 타겟 · 문제 · 차별 축 · 목소리 |
 | `docs/product.md` | ✅ 유즈케이스 · 규제 경계선 |
 | `docs/deploy.md` | ✅ **배포 파이프라인** — 라이브러리 · 버전 · 유저 절차 |
-| `docs/pipeline-v1.md` | ⚠️ 파이프라인 얼개는 유효, 산출물 부분은 낡음 |
-| `docs/setup-gmail.md` | ⚠️ **개발자 전용**. 유저 절차 아님 |
-| `docs/architecture.md`, `docs/project-brief.md` | ❌ **무효.** 이력 참조용 |
+| `docs/pipeline-v1.md` | ⚠️ **ZipCrypto 실측만 유효.** 산출물·UX 부분은 낡음 |
+| ~~`docs/setup-gmail.md`, `architecture.md`, `project-brief.md`~~ | 🗑 지웠다. 셋 다 **파이썬 로컬 실행**을 전제로 쓰였다. 그 코드가 없어진 이상 남겨두면 저장소를 처음 보는 사람이 **없는 시스템을 배운다.** git 이력에 있다 |
 | `core/*.js` | ✅ 코어. 함정 주석이 문서보다 정확하다 |
 | `appsscript/container.gs` | ✅ 하루 한 번 도는 본체 |
 | `appsscript/core.gs` | 🔧 자동 생성 (`npm run build`). 직접 고치지 말 것 |
 | ~~`appsscript/verify.gs`, `probe.gs`~~ | 🗑 지웠다. 던진 질문이 전부 답해졌고, `probe.gs` 는 **나중에 틀린 것으로 밝혀진 결론**(JSON 이 커넥터에서 안 읽힌다 — 실제로는 전파 지연이었다)을 들고 있었다. 답이 끝난 탐침을 남겨두면 다음 사람이 그 결론을 사실로 읽는다 |
-| `src/k_money/` (Python) | 🔧 개발 도구만 남음 (Gmail 탐색, 픽스처 생성) |
+| ~~`src/k_money/` (Python)~~ | 🗑 지웠다 (573줄). Apps Script 파이프라인이 전부 대신한다. Gmail 검색어의 세 번째 사본도 여기 있었다 |
+| `appsscript/app.gs` | ✅ **파이프라인 본체.** 라이브러리라 고칠 수 있다 |
+| `docs/AGENT.md.txt` | ✅ 유저 드라이브에 나가는 AI 안내문의 원본. `app.gs` 와 글자까지 같아야 한다 (테스트가 강제) |
 
 ---
 

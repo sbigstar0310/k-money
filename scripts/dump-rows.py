@@ -4,7 +4,13 @@
 같은 모양의 행을 얻으므로, 이 파일은 **로컬에서 core/ 를 검증하기 위한
 픽스처 생성기**일 뿐이다.
 
-    uv run python scripts/dump-rows.py data/extracted/*.xlsx fixtures/real.json
+    pip install openpyxl
+    python3 scripts/dump-rows.py data/extracted/*.xlsx fixtures/real.json
+
+⚠️ 이 저장소에 남은 **유일한 파이썬**이다. 파이프라인은 전부 Apps Script 로
+   갔고 src/ 는 지웠다. 이 파일만 남긴 이유는 xlsx 를 읽는 데 openpyxl 만한
+   게 없어서다 — 그리고 실데이터 픽스처가 없으면 smoke-real 테스트가 못 돈다.
+   (합성 데이터가 스펙이고, 실데이터는 있으면 돌리는 보조 검증이다.)
 
 날짜는 getValues() 가 Date 를 주는 것과 맞추기 위해 ISO 문자열로 내보낸다
 (core/parse.js 의 day() 가 Date 와 문자열을 둘 다 받는다).

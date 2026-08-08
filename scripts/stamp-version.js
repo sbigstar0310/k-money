@@ -47,12 +47,4 @@ if (stamped === readme && !readme.includes('현재 버전 **' + version + '**'))
 }
 fs.writeFileSync(readmePath, stamped);
 
-// pyproject 는 대체된 파이썬 쪽이지만, 버전이 어긋나 있으면 어느 쪽이
-// 진짜인지 헷갈린다. 같이 찍는다.
-const pyPath = path.join(ROOT, 'pyproject.toml');
-if (fs.existsSync(pyPath)) {
-  const py = fs.readFileSync(pyPath, 'utf8');
-  fs.writeFileSync(pyPath, py.replace(/^version = "[\d.]+"$/m, 'version = "' + version + '"'));
-}
-
-console.log('v' + version + ' → VERSION, appsscript/container.gs, README.md, pyproject.toml');
+console.log('v' + version + ' → VERSION, appsscript/container.gs, README.md');
