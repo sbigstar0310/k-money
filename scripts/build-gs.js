@@ -25,6 +25,7 @@ const path = require('path');
 
 const ORDER = ['model', 'layout', 'analyze', 'parse', 'profile', 'aggregate']; // 의존 순서
 const root = path.join(__dirname, '..');
+const VERSION = require(path.join(root, 'package.json')).version;
 const dest = path.join(root, 'appsscript', 'core.gs');
 
 const header = `/**
@@ -42,6 +43,10 @@ const header = `/**
 
 `;
 
+// 버전을 코드에 박아 둔다. 유저가 쓰는 버전과 최신 버전을 비교하려면
+// 돌고 있는 코드가 자기 버전을 알아야 한다.
+const versionDecl = `var KM = (globalThis.KM = globalThis.KM || {});\nKM.VERSION = '${VERSION}';\n`;
+
 const parts = ORDER.map(function (name) {
   const file = path.join(root, 'core', name + '.js');
   const src = fs.readFileSync(file, 'utf8')
@@ -51,7 +56,7 @@ const parts = ORDER.map(function (name) {
 });
 
 fs.mkdirSync(path.dirname(dest), { recursive: true });
-fs.writeFileSync(dest, header + parts.join('\n\n'), 'utf8');
+fs.writeFileSync(dest, header + versionDecl + '\n' + parts.join('\n\n'), 'utf8');
 
 const bytes = fs.statSync(dest).size;
-console.log('→ appsscript/core.gs  (' + bytes.toLocaleString() + ' bytes, ' + ORDER.length + '개 모듈)');
+console.log('→ appsscript/core.gs  v' + VERSION + '  (' + bytes.toLocaleString() + ' bytes, ' + ORDER.length + '개 모듈)');
