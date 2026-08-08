@@ -42,6 +42,7 @@ var KMApp = (function () {
     latestName: '돈동생-최신.json',
     statusName: '돈동생-상태.json',
     profileName: '내정보.json',
+    agentName: 'AGENT.md',
     // 지난 기록은 '돈동생-YYYY-MM-DD.json'. 최신본과 접두사가 같으므로
     // 날짜 모양까지 봐야 한다 — 안 그러면 최신본을 히스토리로 세서 지운다.
     historyPattern: /^돈동생-\d{4}-\d{2}-\d{2}\.json$/,
@@ -89,6 +90,7 @@ var KMApp = (function () {
 
     var folder = ensureFolder(env.drive, CFG.folderName);
     var raw = ensureFolder(folder, CFG.rawFolderName);
+    ensureAgentGuide(folder);
     var stamp = Utilities.formatDate(found.date, env.tz, 'yyyy-MM-dd');
 
     // 1) 원본 보존 — 집계를 고쳤을 때 과거를 다시 계산할 수 있어야 한다
@@ -308,6 +310,134 @@ var KMApp = (function () {
     }
   }
 
+  // ── 폴더를 읽는 AI 에게 남기는 안내 ──────────────────────────────
+  //
+  // ⚠️ **hints 만으로는 늦다.** hints 는 facts 안에 있어서 파일을 이미 찾은
+  //    뒤에야 읽힌다. AGENT.md 는 폴더를 여는 순간 보이므로, 어느 파일을
+  //    읽어야 하는지부터 알려줄 수 있다.
+  //
+  //    그리고 여기에 **쓰기 규칙**을 적는다. 커넥터가 쓰기를 지원하면
+  //    (Claude·ChatGPT) AI 가 대화 중에 내정보.json 을 직접 만들 수 있고,
+  //    그게 "대화할수록 개인화된다" 의 유일한 무마찰 경로다.
+  //
+  //    스크립트가 매번 새로 쓰므로 코드 버전과 항상 맞는다. 유저가 고쳐도
+  //    다음 실행에 되돌아온다 — 이건 우리 문서지 유저 파일이 아니다.
+
+  var AGENT_GUIDE = [
+      '# 이 폴더를 읽는 AI에게',
+      '',
+      '여기는 **돈동생**이 만든 폴더입니다. 한국의 가계부 앱(뱅크샐러드)에서 내보낸',
+      '거래 내역을 매일 정리해 둡니다. 이 파일을 먼저 읽고 시작하세요.',
+      '',
+      '기간은 사용자가 뱅크샐러드에서 고릅니다(최소 1년). **얼마나 담겼는지는',
+      '`돈동생-최신.json`의 `period`를 보세요.** 몇 년치라고 넘겨짚지 마세요.',
+      '',
+      '## 파일',
+      '',
+      '| 파일 | 무엇 |',
+      '|---|---|',
+      '| `돈동생-최신.json` | **이걸 읽으세요.** 가장 최근 집계 |',
+      '| `돈동생-YYYY-MM-DD.json` | 지난 기록. 비교가 필요할 때만 |',
+      '| `내정보.json` | 사용자의 목표와 가정. 없을 수도 있습니다 |',
+      '| `돈동생-상태.json` | 마지막 실행 결과. 사용자가 "왜 안 돌아?" 물을 때만 |',
+      '| `raw/` | 원본 zip. 열지 마세요 |',
+      '',
+      '## 숫자를 다룰 때',
+      '',
+      '`돈동생-최신.json` 안의 `hints`에 각 필드의 뜻과 계산 규약이 적혀 있습니다.',
+      '**그걸 따르세요.** 특히:',
+      '',
+      '- 금액은 원(KRW) 단위 정수입니다',
+      '- `expense`는 이미 환불을 차감한 순액입니다. 다시 빼지 마세요',
+      '- `pace`와 `avgMonthlyExpense`는 보정된 값입니다. 직접 다시 유도하지 마세요',
+      '- `otherTotal` 같은 필드는 목록에서 **잘려나간 나머지**입니다. 합계를 검산할 때',
+      '  같이 더하세요',
+      '',
+      '**없는 키는 만들어내지 마세요.** 돈동생은 믿을 수 없는 값을 아예 빼고',
+      '`...Omitted` 필드에 이유를 적습니다. 예를 들어 `pace.monthlyOmitted`가 있으면',
+      '"월 얼마 모으는지"는 지금 데이터로 답할 수 없다는 뜻입니다. 추정해서 채우지 말고,',
+      '왜 없는지 설명하세요.',
+      '',
+      '`dataQuality.flags`를 확인하세요. 여기 뭔가 있으면 그걸 감안해서 답해야 합니다.',
+      '',
+      '## 사용자의 목표를 기억하는 법',
+      '',
+      '대화에서 목표나 상황을 알게 되면 **이 폴더의 `내정보.json`에 적어 두세요.**',
+      '그러면 다음 대화에서도 이어집니다. 안 적으면 대화가 끝나는 순간 사라집니다.',
+      '',
+      '```json',
+      '{',
+      '  "schema": "k-money/profile@1",',
+      '  "goals": [',
+      '    {',
+      '      "label": "3년 안에 5천만원",',
+      '      "amount": 50000000,',
+      '      "by": "2029-08",',
+      '      "estimated": false,',
+      '      "source": "user",',
+      '      "at": "2026-08-08"',
+      '    }',
+      '  ],',
+      '  "assumptions": {',
+      '    "monthlyIncome": { "value": 2600000, "source": "user", "at": "2026-08-08" }',
+      '  },',
+      '  "notes": "내년 이직 예정. 월세 62만원."',
+      '}',
+      '```',
+      '',
+      '**규칙**',
+      '',
+      '- `amount`는 **원 단위 숫자**여야 합니다. "5천만원" 같은 문자열은 안 됩니다',
+      '- 사용자가 "전세 구하고 싶어"처럼 금액 없이 말하면 **당신이 숫자로 바꾸세요.**',
+      '  그게 당신이 잘하고 돈동생이 못하는 일입니다. 다만 `estimated: true`로 표시하고',
+      '  "1.5억으로 잡았는데 맞나요?"라고 되물으세요',
+      '- `source`는 사용자가 직접 말했으면 `"user"`, 당신이 추정했으면 `"llm"`',
+      '- `at`은 오늘 날짜. 나중에 "언제 들은 말인지" 알아야 갱신할 수 있습니다',
+      '- 이미 파일이 있으면 **먼저 읽고 합치세요.** 통째로 덮어쓰면 예전 목표가 사라집니다',
+      '- `notes`에는 숫자로 안 떨어지는 맥락을 자유롭게 적으세요',
+      '',
+      '**쓰지 못하는 경우** — 드라이브 연결이 읽기 전용이면 파일을 만들 수 없습니다.',
+      '그때는 사용자에게 위 JSON을 보여주고 "돈동생 폴더에 `내정보.json`으로 저장해',
+      '두시면 다음에도 기억해요"라고 알려주세요.',
+      '',
+      '## 하지 않을 것',
+      '',
+      '돈동생은 **사실·계산·비교까지만** 합니다. 당신도 그 선을 지켜주세요.',
+      '',
+      '- 특정 금융상품을 추천하지 마세요 (어떤 적금, 어떤 ETF)',
+      '- 사고팔라고 하지 마세요',
+      '- 수익률을 가정한 미래 자산을 단정하지 마세요. 하려면 가정을 명시하고',
+      '  "그 이율이 맞다면"이라고 조건을 다세요',
+      '',
+      '사용자가 물으면 "저는 투자 조언을 할 수 없어요"라고 말하되, **사실은 다 보여주세요.**',
+      '지금 얼마 있고, 어디에 쓰고 있고, 이 페이스면 언제쯤인지는 계산해서 알려줘도 됩니다.',
+      '판단은 사용자가 합니다.',
+      '',
+      '## 데이터가 오래됐을 때',
+      '',
+      '`돈동생-최신.json`의 `period.to`가 2주 이상 지났으면, 사용자가 뱅크샐러드에서',
+      '내보내기를 안 한 겁니다. 답을 하되 **먼저 알려주세요** — 오래된 숫자로 이야기하면',
+      '사용자는 지금 상황인 줄 압니다.',
+      '',
+      '내보내는 법: 뱅크샐러드 앱 → 가계부 → 톱니바퀴 → 파일로 받기 →',
+      '설치할 때 쓴 구글 주소로, 같은 비밀번호로.'
+  ].join('\n') + '\n';
+
+  /** 내용이 달라졌을 때만 쓴다. 매번 덮으면 수정시각만 흔들린다. */
+  function ensureAgentGuide(folder) {
+    var f = findFile(folder, CFG.agentName);
+    if (f) {
+      try {
+        if (f.getBlob().getDataAsString('UTF-8') === AGENT_GUIDE) return;
+      } catch (e) {
+        // 못 읽으면 새로 쓴다
+      }
+      f.setContent(AGENT_GUIDE);
+      return;
+    }
+    folder.createFile(Utilities.newBlob(AGENT_GUIDE, 'text/markdown', CFG.agentName));
+  }
+
   // ── 데이터가 멈춘 걸 알아채기 ────────────────────────────────────
   //
   // ⚠️ **이 도구가 조용히 죽는 방식이 정확히 이거다.** 유저가 뱅샐 내보내기를
@@ -355,6 +485,8 @@ var KMApp = (function () {
   function writeStatus(env, result) {
     result.at = new Date().toISOString();
     var folder = ensureFolder(env.drive, CFG.folderName);
+    // 첫 실행이 idle 이어도 안내는 있어야 한다 — 유저가 폴더를 먼저 열 수 있다.
+    ensureAgentGuide(folder);
     putJson(folder, CFG.statusName, JSON.stringify(result, null, 2));
     writeStatusToSheet(env, result);
   }
@@ -604,6 +736,7 @@ var KMApp = (function () {
     ensureFolder: ensureFolder, findFile: findFile, putFile: putFile, putJson: putJson,
     readJson: readJson, readPrevious: readPrevious, pruneFacts: pruneFacts,
     dataAge: dataAge, freshnessLine: freshnessLine, isStale: isStale,
+    ensureAgentGuide: ensureAgentGuide, AGENT_GUIDE: AGENT_GUIDE,
     writeStatus: writeStatus, writeStatusToSheet: writeStatusToSheet,
     safeCell: safeCell, localTime: localTime, hint: hint,
     menuSpec: menuSpec, menu: menu, menuSetup: menuSetup, menuSetPassword: menuSetPassword,

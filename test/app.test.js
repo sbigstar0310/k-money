@@ -489,11 +489,61 @@ test('menuRunNow — 라이브러리가 폭발해도 날 것의 오류를 보여
   assert.match(body, /시트 스크립트/, '버전을 같이 보여줘야 신고를 받을 수 있다');
 });
 
-test('유저에게 보이는 문자열에 마크다운을 쓰지 않는다', () => {
+test('대화상자 문구에 마크다운을 쓰지 않는다', () => {
   // ui.alert 는 평문만 렌더한다. **강조** 는 별표가 그대로 보인다.
-  const { strings } = require('./lib/scan')(SRC);
+  //
+  // ⚠️ AGENT_GUIDE 는 **진짜 마크다운 파일**이라 별표가 맞다. 그 배열을
+  //    빼고 본다 — 안 그러면 문서를 쓸 때마다 이 테스트가 막는다.
+  const start = SRC.indexOf('var AGENT_GUIDE = [');
+  const end = SRC.indexOf("].join('\\n')", start);
+  assert.ok(start !== -1 && end !== -1, 'AGENT_GUIDE 블록을 못 찾았다');
+  const withoutGuide = SRC.slice(0, start) + SRC.slice(end);
+
+  const { strings } = require('./lib/scan')(withoutGuide);
   const bad = strings.filter((l) => l.indexOf('**') !== -1);
   assert.deepEqual(bad, [], '별표가 그대로 보인다: ' + bad.join(' | '));
+});
+
+test('AGENT.md 가 저장소 사본과 글자까지 같다', () => {
+  // 두 벌이 되면 반드시 어긋난다. 저장소 쪽은 사람이 고치기 좋고,
+  // app.gs 쪽은 실제로 유저 드라이브에 나가는 것이다.
+  const A = loadApp();
+  const repoCopy = fs.readFileSync(path.join(ROOT, 'docs', 'AGENT.md.txt'), 'utf8');
+  assert.equal(A.AGENT_GUIDE, repoCopy,
+    'docs/AGENT.md.txt 와 app.gs 의 AGENT_GUIDE 가 다르다');
+});
+
+test('AGENT.md 는 내용이 같으면 다시 쓰지 않는다', () => {
+  const A = loadApp();
+  const folder = fakeFolder('돈동생');
+  A.ensureAgentGuide(folder);
+  const first = folder._files.get('AGENT.md');
+  A.ensureAgentGuide(folder);
+  assert.strictEqual(folder._files.get('AGENT.md'), first, '매번 새로 쓰고 있다');
+  assert.equal(folder._files.size, 1);
+});
+
+test('AGENT.md 가 낡았으면 갱신한다', () => {
+  const A = loadApp();
+  const folder = fakeFolder('돈동생');
+  A.putJson(folder, 'AGENT.md', '옛날 내용');
+  A.ensureAgentGuide(folder);
+  assert.equal(folder._files.get('AGENT.md').getBlob().getDataAsString(), A.AGENT_GUIDE);
+});
+
+test('AGENT.md 가 쓰기 규칙과 경계를 담는다', () => {
+  // 이 파일의 값어치는 두 가지다 — AI 가 내정보.json 을 쓸 줄 알게 하는 것,
+  // 그리고 우리가 안 하기로 한 걸 AI 도 안 하게 하는 것.
+  const A = loadApp();
+  assert.match(A.AGENT_GUIDE, /내정보\.json/);
+  assert.match(A.AGENT_GUIDE, /k-money\/profile@1/, '스키마가 있어야 따라 쓸 수 있다');
+  assert.match(A.AGENT_GUIDE, /추천하지 마세요/, '상품 추천 금지가 빠졌다');
+  assert.match(A.AGENT_GUIDE, /먼저 읽고 합치세요/, '덮어쓰면 예전 목표가 사라진다');
+  assert.match(A.AGENT_GUIDE, /period/, '기간을 넘겨짚지 말라고 해야 한다');
+  // 우리가 내보내는 파일 이름과 안내가 어긋나면 AI 가 못 찾는다.
+  assert.ok(A.AGENT_GUIDE.indexOf(A.CFG.latestName) !== -1);
+  assert.ok(A.AGENT_GUIDE.indexOf(A.CFG.profileName) !== -1);
+  assert.ok(A.AGENT_GUIDE.indexOf(A.CFG.statusName) !== -1);
 });
 
 test('메뉴 항목이 컨테이너의 실제 함수를 가리킨다', () => {
