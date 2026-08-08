@@ -37,14 +37,47 @@ var CFG = {
 /**
  * 코어를 어디서 찾을지.
  *
- * 라이브러리로 붙였으면 식별자(KMoney) 아래에, 개발 중 한 프로젝트에 통째로
- * 붙여넣었으면 전역에 있다. 이 한 줄 덕에 개발용 코드와 배포용 코드가
- * 갈라지지 않는다 — 갈라지면 반드시 어긋나고, 어긋난 걸 늦게 안다.
+ * 라이브러리로 붙였으면 식별자 아래에, 개발 중 한 프로젝트에 통째로
+ * 붙여넣었으면 전역에 있다. 덕분에 개발용 코드와 배포용 코드가 갈라지지
+ * 않는다 — 갈라지면 반드시 어긋나고, 어긋난 걸 늦게 안다.
+ *
+ * ⚠️ **식별자 이름에 기대지 않는다.** 라이브러리를 추가할 때 식별자는
+ *    프로젝트 이름에서 자동으로 채워지고(예: `kmoneylib`) 유저가 바꿀 수도
+ *    있다. 이름을 하나로 못 박으면 그 한 글자 때문에 파이프라인이 통째로
+ *    멈춘다. 그래서 **API 모양으로 찾는다** — `buildFacts` 를 가진 것이 코어다.
  */
-var LIB_SYMBOL = 'KMoney';
+// Apps Script 가 프로젝트 이름에서 자동으로 만드는 식별자가 먼저다.
+// 'k-money-lib' → 'kmoneylib'. 유저가 바꿀 수도 있으므로 못 찾으면 모양으로 찾는다.
+var LIB_CANDIDATES = ['kmoneylib', 'kmoney', 'KMoney'];
+
 function api_() {
+  return resolveApi_().api;
+}
+
+/** 어디서 찾았는지까지 돌려준다 — setup_check 가 진단에 쓴다. */
+function resolveApi_() {
   var g = (function () { return this; })() || globalThis;
-  return g[LIB_SYMBOL] || g;
+
+  for (var i = 0; i < LIB_CANDIDATES.length; i++) {
+    var c = g[LIB_CANDIDATES[i]];
+    if (c && typeof c.buildFacts === 'function') {
+      return { api: c, via: '라이브러리 ' + LIB_CANDIDATES[i] };
+    }
+  }
+  if (typeof g.buildFacts === 'function') {
+    return { api: g, via: '같은 프로젝트(개발 모드)' };
+  }
+  // 식별자를 바꿔 붙였을 때. 전역을 훑어 모양으로 찾는다.
+  for (var k in g) {
+    try {
+      if (g[k] && typeof g[k].buildFacts === 'function') {
+        return { api: g[k], via: '라이브러리 ' + k + ' (모양으로 찾음)' };
+      }
+    } catch (e) {
+      // 접근만으로 던지는 전역이 있다. 그건 코어가 아니다.
+    }
+  }
+  return { api: g, via: '못 찾음' };
 }
 
 var PROP = {
@@ -109,13 +142,16 @@ function setup_check() {
     Logger.log('   ※ 코드에 적지 마라. 편집 이력에 남는다.');
   }
 
-  var api = api_();
+  var found = resolveApi_();
+  var api = found.api;
   if (typeof api.buildFacts !== 'function') {
     ok = false;
-    Logger.log('❌ 코어를 못 찾았다. 라이브러리(' + LIB_SYMBOL + ')를 추가했거나');
+    Logger.log('❌ 코어를 못 찾았다. 라이브러리를 추가했거나');
     Logger.log('   core.gs + library-api.gs 를 이 프로젝트에 붙여넣어야 한다.');
+    Logger.log('   찾아본 식별자: ' + LIB_CANDIDATES.join(', ') + ' + 전역 전수');
   } else {
     Logger.log('✅ 코어 로드됨 — v' + api.version() + ' / ' + api.schema());
+    Logger.log('   경로: ' + found.via);
   }
 
   if (typeof api.unzip !== 'function') {
