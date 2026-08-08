@@ -422,7 +422,9 @@ var KMApp = (function () {
    */
   function hint(pw) {
     // charAt 은 이모지를 반쪽으로 자른다. 글자 단위로 센다.
-    var ch = Array.from ? Array.from(pw) : String(pw).split('');
+    // (매니페스트가 V8 을 고정하므로 Array.from 은 항상 있다. 폴백을 두면
+    //  split('') 이 되는데, 그게 정확히 여기서 막으려는 동작이다.)
+    var ch = Array.from(pw);
     var n = ch.length;
     if (n < 6) return n + '자';
     return ch[0] + new Array(n - 1).join('*') + ch[n - 1];

@@ -441,6 +441,19 @@ test('부채가 없으면 debts 를 만들지 않는다', () => {
   assert.equal(facts.balance.totalDebt, 0);
 });
 
+// ── 빌드 산물 ──────────────────────────────────────────────────────
+
+test('커밋된 core.gs 가 지금 core/ 에서 나온 것이다', () => {
+  // ⚠️ **실제로 유저에게 도는 건 커밋된 core.gs 다.** 예전에는 core/ 를
+  //    고치고 빌드를 안 돌려도 테스트가 전부 통과했다 — LIMITS 를 12에서
+  //    6으로 바꾸고 확인했더니 133개 전부 초록이었고, 프로덕션은 옛 번들이었다.
+  //    npm test 는 누구나 돌리지만 npm run check 는 아무도 기억 못 한다.
+  const build = require(path.join(__dirname, '..', 'scripts', 'build-gs.js'));
+  const committed = fs.readFileSync(build.dest, 'utf8');
+  assert.equal(committed, build.build(),
+    'core/ 를 고치고 node scripts/build-gs.js 를 안 돌렸다');
+});
+
 // ── 소스 위생 ──────────────────────────────────────────────────────
 
 test('소스에 NUL 바이트가 없다 — 두 번 당한 함정이다', () => {

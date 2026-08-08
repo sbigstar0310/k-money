@@ -71,5 +71,13 @@ facts.generatedAt = '2026-06-30T22:00:00.000Z';
 facts.sourceMessageId = 'sample';   // 테스트가 이걸로 실데이터 커밋을 막는다
 
 const out = path.join(__dirname, '..', 'docs', 'sample-latest.json');
-fs.writeFileSync(out, JSON.stringify(facts, null, 2) + '\n');
-console.log('docs/sample-latest.json — ' + JSON.stringify(facts).length + ' bytes');
+const json = JSON.stringify(facts, null, 2) + '\n';
+
+// 테스트는 파일을 건드리지 않고 이 값만 받아 비교한다.
+// 테스트가 저장소 파일을 쓰면, 실패한 김에 낡은 내용을 커밋하게 된다.
+module.exports = { dest: out, render: function () { return json; } };
+
+if (require.main === module) {
+  fs.writeFileSync(out, json);
+  console.log('docs/sample-latest.json — ' + JSON.stringify(facts).length + ' bytes');
+}

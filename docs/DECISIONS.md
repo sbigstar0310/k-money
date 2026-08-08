@@ -245,7 +245,7 @@
 | `core/*.js` | ✅ 코어. 함정 주석이 문서보다 정확하다 |
 | `appsscript/container.gs` | ✅ 하루 한 번 도는 본체 |
 | `appsscript/core.gs` | 🔧 자동 생성 (`npm run build`). 직접 고치지 말 것 |
-| `appsscript/verify.gs`, `probe.gs` | 🔧 검증 도구. 유저 배포물 아님 |
+| ~~`appsscript/verify.gs`, `probe.gs`~~ | 🗑 지웠다. 던진 질문이 전부 답해졌고, `probe.gs` 는 **나중에 틀린 것으로 밝혀진 결론**(JSON 이 커넥터에서 안 읽힌다 — 실제로는 전파 지연이었다)을 들고 있었다. 답이 끝난 탐침을 남겨두면 다음 사람이 그 결론을 사실로 읽는다 |
 | `src/k_money/` (Python) | 🔧 개발 도구만 남음 (Gmail 탐색, 픽스처 생성) |
 
 ---

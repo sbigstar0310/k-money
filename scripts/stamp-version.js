@@ -4,7 +4,7 @@
  *
  * `npm version` 훅에서 돈다. 손으로 맞추게 두면 반드시 어긋나고, 어긋나면
  * 유저가 `버전 보기` 에서 거짓말을 읽는다. 어긋난 걸 테스트가 잡긴 하지만
- * (test/main.test.js), 잡히는 시점은 **다음 릴리스**라 이미 늦다.
+ * (test/container.test.js), 잡히는 시점은 **다음 릴리스**라 이미 늦다.
  */
 
 'use strict';
@@ -47,4 +47,12 @@ if (stamped === readme && !readme.includes('현재 버전 **' + version + '**'))
 }
 fs.writeFileSync(readmePath, stamped);
 
-console.log('v' + version + ' → VERSION, appsscript/container.gs, README.md');
+// pyproject 는 대체된 파이썬 쪽이지만, 버전이 어긋나 있으면 어느 쪽이
+// 진짜인지 헷갈린다. 같이 찍는다.
+const pyPath = path.join(ROOT, 'pyproject.toml');
+if (fs.existsSync(pyPath)) {
+  const py = fs.readFileSync(pyPath, 'utf8');
+  fs.writeFileSync(pyPath, py.replace(/^version = "[\d.]+"$/m, 'version = "' + version + '"'));
+}
+
+console.log('v' + version + ' → VERSION, appsscript/container.gs, README.md, pyproject.toml');

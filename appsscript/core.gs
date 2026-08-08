@@ -50,7 +50,7 @@ KM.model = (function () {
 
   // 값은 ASCII 식별자다. 한국어를 넣으면 안 된다 — 이 값은 산출물 JSON 에
   // 그대로 실려 나가고, 그러면 소비자가 한국어 문자열로 분기하게 된다.
-  // 표시 문구를 고치는 순간 와이어 계약이 깨진다. 표시는 LABEL 이 맡는다.
+  // 표시 문구를 고치는 순간 와이어 계약이 깨진다. 화면에 뭐라고 쓸지는 LLM 몫이다.
   var Kind = { INCOME: 'income', EXPENSE: 'expense', TRANSFER: 'transfer' };
 
   var Bucket = {
@@ -64,11 +64,6 @@ KM.model = (function () {
     DEBT: 'debt',
   };
 
-  var LABEL = {
-    income: '수입', expense: '지출', transfer: '이체',
-    cash: '현금성', savings: '저축성', investment: '투자성', property: '실물',
-    insurance: '보험', pension: '연금', other: '기타', debt: '부채',
-  };
 
   var BASE_CURRENCY = 'KRW';
 
@@ -175,21 +170,13 @@ KM.model = (function () {
     return sum(inBucket(snap, bucket), function (h) { return h.amount; });
   }
 
-  /**
-   * 종목 수익률. 원금 0이면 계산 불가 — 0 이 아니라 null 이다.
-   * 0 을 돌려주면 '본전'으로 읽혀서, 원금 정보가 없는 CMA 계좌가
-   * '손익 없음'으로 리포트에 조용히 섞인다.
-   */
-  function roi(inv) {
-    return inv.principal > 0 ? (inv.value - inv.principal) / inv.principal : null;
-  }
 
   return {
-    Kind: Kind, Bucket: Bucket, LABEL: LABEL, BASE_CURRENCY: BASE_CURRENCY,
+    Kind: Kind, Bucket: Bucket, BASE_CURRENCY: BASE_CURRENCY,
     outflow: outflow, inflow: inflow, isRefund: isRefund, month: month,
     itemKey: itemKey, matchOwner: matchOwner,
     assets: assets, debts: debts, totalAssets: totalAssets, totalDebt: totalDebt,
-    netWorth: netWorth, inBucket: inBucket, bucketTotal: bucketTotal, roi: roi,
+    netWorth: netWorth, inBucket: inBucket, bucketTotal: bucketTotal,
     sum: sum,
   };
 })();
@@ -478,8 +465,9 @@ KM.analyze = (function () {
    * 1. **연액 = 월평균 × 12** 로 계산했다. 13개월 중 3개월만 나온 항목에도
    *    12를 곱해서, 보고한 연 316만원 중 **209만원(66%)이 존재하지 않는
    *    돈**이었다. 두 달 전 시작한 구독과 이미 해지한 구독이 모두 1년치로
-   *    부풀려졌다. → 실제 합계(observedTotal)와 전망치(projectedAnnual)를
-   *    분리하고, 전망은 **아직 살아 있는 항목에만** 낸다.
+   *    부풀려졌다. → **전망을 아예 내지 않는다.** 실제로 나간 돈
+   *    (observedTotal)과 '아직 살아 있나'(active) 만 낸다. ×12 는 LLM 이
+   *    한다 — 우리가 하면 죽은 구독까지 1년치로 세게 된다.
    *
    * 2. 판정을 **(최대−최소)/평균 ≤ 0.15** 로 했다. 두 점만 보는 기준이라
    *    12개월 구독도 가격 인상 한 번이면 탈락했다(실측 3건 미탐). 반대로
@@ -542,7 +530,6 @@ KM.analyze = (function () {
         density: Math.round(density * 100) / 100,
         active: active,
         // 살아 있는 항목만 1년치를 전망한다. 죽은 건 null — 없는 돈이다.
-        projectedAnnual: active ? med * 12 : null,
       });
     });
 
@@ -1079,15 +1066,10 @@ KM.profile = (function () {
     return p;
   }
 
-  /** 유저가 말한 값. 없으면 null. */
-  function stated(profile, key) {
-    return valueOf(profile.assumptions[key], null);
-  }
 
   return {
     SCHEMA: SCHEMA,
     defaults: defaults, normalize: normalize, entry: entry, valueOf: valueOf,
-    stated: stated,
   };
 })();
 

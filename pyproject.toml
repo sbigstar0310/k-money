@@ -1,7 +1,7 @@
 [project]
 name = "k-money"
-version = "0.1.0"
-description = "개인 금융 데이터(증권 계좌 + 지출 내역)를 정기적으로 감사하는 에이전트"
+version = "0.1.1"
+description = "돈동생 (⚠️ src/ 의 파이썬 파이프라인은 Apps Script 로 대체됐다. docs/DECISIONS.md 참고)"
 requires-python = ">=3.11"
 dependencies = [
     "google-api-python-client>=2.150.0",

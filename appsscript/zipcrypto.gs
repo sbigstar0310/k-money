@@ -188,7 +188,7 @@ function unzipEncrypted(zipBlob, password) {
 //
 // 예전에 여기 있던 step4_decrypt() 는 걷어냈다. 비밀번호를 코드에
 // 하드코딩하고 있었는데, 편집 이력에 남고 프로젝트를 복사·공유하는 순간
-// 같이 나간다. 지금은 main.gs 가 스크립트 속성에서 읽는다.
+// 같이 나간다. 지금은 app.gs 가 env.props(스크립트 속성)에서 읽는다.
 //
-// 해제만 따로 시험해 보려면 main.gs 의 runOnceForce() 를 써라.
+// 해제만 따로 시험해 보려면 container.gs 의 runOnceForce() 를 써라.
 // 실패하면 status.json 에 어느 단계에서 멈췄는지 남는다.

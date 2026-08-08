@@ -309,11 +309,11 @@ test('샘플 산출물이 실제 스키마와 같고 커넥터 한도 안에 든
   assert.equal(sample.sourceMessageId, 'sample');
 
   // ⚠️ 손으로 고치면 반드시 실제 산출물과 어긋난다. 스크립트로만 만든다.
-  const { execFileSync } = require('node:child_process');
-  const before = fs.readFileSync(path.join(ROOT, 'docs', 'sample-latest.json'), 'utf8');
-  execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'make-sample.js')], { cwd: ROOT });
-  const after = fs.readFileSync(path.join(ROOT, 'docs', 'sample-latest.json'), 'utf8');
-  assert.equal(after, before, 'sample 이 낡았다 — node scripts/make-sample.js 를 돌려라');
+  //    테스트는 파일을 쓰지 않고 값만 받아 비교한다 — 테스트가 저장소 파일을
+  //    고치면, 실패한 김에 낡은 내용이 커밋된다.
+  const maker = require(path.join(ROOT, 'scripts', 'make-sample.js'));
+  assert.equal(fs.readFileSync(maker.dest, 'utf8'), maker.render(),
+    'sample 이 낡았다 — node scripts/make-sample.js 를 돌려라');
 });
 
 test('샘플 안에서 잘라낸 값이 전부 검산된다', () => {

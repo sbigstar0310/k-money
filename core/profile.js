@@ -88,15 +88,10 @@ KM.profile = (function () {
     return p;
   }
 
-  /** 유저가 말한 값. 없으면 null. */
-  function stated(profile, key) {
-    return valueOf(profile.assumptions[key], null);
-  }
 
   return {
     SCHEMA: SCHEMA,
     defaults: defaults, normalize: normalize, entry: entry, valueOf: valueOf,
-    stated: stated,
   };
 })();
 

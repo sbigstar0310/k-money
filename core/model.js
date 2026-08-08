@@ -30,7 +30,7 @@ KM.model = (function () {
 
   // 값은 ASCII 식별자다. 한국어를 넣으면 안 된다 — 이 값은 산출물 JSON 에
   // 그대로 실려 나가고, 그러면 소비자가 한국어 문자열로 분기하게 된다.
-  // 표시 문구를 고치는 순간 와이어 계약이 깨진다. 표시는 LABEL 이 맡는다.
+  // 표시 문구를 고치는 순간 와이어 계약이 깨진다. 화면에 뭐라고 쓸지는 LLM 몫이다.
   var Kind = { INCOME: 'income', EXPENSE: 'expense', TRANSFER: 'transfer' };
 
   var Bucket = {
@@ -44,11 +44,6 @@ KM.model = (function () {
     DEBT: 'debt',
   };
 
-  var LABEL = {
-    income: '수입', expense: '지출', transfer: '이체',
-    cash: '현금성', savings: '저축성', investment: '투자성', property: '실물',
-    insurance: '보험', pension: '연금', other: '기타', debt: '부채',
-  };
 
   var BASE_CURRENCY = 'KRW';
 
@@ -155,21 +150,13 @@ KM.model = (function () {
     return sum(inBucket(snap, bucket), function (h) { return h.amount; });
   }
 
-  /**
-   * 종목 수익률. 원금 0이면 계산 불가 — 0 이 아니라 null 이다.
-   * 0 을 돌려주면 '본전'으로 읽혀서, 원금 정보가 없는 CMA 계좌가
-   * '손익 없음'으로 리포트에 조용히 섞인다.
-   */
-  function roi(inv) {
-    return inv.principal > 0 ? (inv.value - inv.principal) / inv.principal : null;
-  }
 
   return {
-    Kind: Kind, Bucket: Bucket, LABEL: LABEL, BASE_CURRENCY: BASE_CURRENCY,
+    Kind: Kind, Bucket: Bucket, BASE_CURRENCY: BASE_CURRENCY,
     outflow: outflow, inflow: inflow, isRefund: isRefund, month: month,
     itemKey: itemKey, matchOwner: matchOwner,
     assets: assets, debts: debts, totalAssets: totalAssets, totalDebt: totalDebt,
-    netWorth: netWorth, inBucket: inBucket, bucketTotal: bucketTotal, roi: roi,
+    netWorth: netWorth, inBucket: inBucket, bucketTotal: bucketTotal,
     sum: sum,
   };
 })();

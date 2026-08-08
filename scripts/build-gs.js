@@ -23,7 +23,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const ORDER = ['model', 'layout', 'analyze', 'parse', 'profile', 'aggregate']; // 의존 순서
+const ORDER = require('../core/order'); // 의존 순서 — 한 곳에서만 정한다
 const root = path.join(__dirname, '..');
 const VERSION = require(path.join(root, 'package.json')).version;
 const dest = path.join(root, 'appsscript', 'core.gs');
@@ -55,8 +55,16 @@ const parts = ORDER.map(function (name) {
   return '// ' + '═'.repeat(68) + '\n// core/' + name + '.js\n// ' + '═'.repeat(68) + '\n\n' + src.trim() + '\n';
 });
 
-fs.mkdirSync(path.dirname(dest), { recursive: true });
-fs.writeFileSync(dest, header + versionDecl + '\n' + parts.join('\n\n'), 'utf8');
+const bundle = header + versionDecl + '\n' + parts.join('\n\n');
 
-const bytes = fs.statSync(dest).size;
-console.log('→ appsscript/core.gs  v' + VERSION + '  (' + bytes.toLocaleString() + ' bytes, ' + ORDER.length + '개 모듈)');
+// 테스트가 '커밋된 core.gs 가 지금 core/ 에서 나온 것인가' 를 이걸로 검사한다.
+// 예전에는 두 파일이 어긋나도 테스트가 전부 통과했다 — 그리고 실제로 도는 건
+// 커밋된 쪽이다.
+module.exports = { ORDER: ORDER, dest: dest, build: function () { return bundle; } };
+
+if (require.main === module) {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, bundle, 'utf8');
+  const bytes = fs.statSync(dest).size;
+  console.log('→ appsscript/core.gs  v' + VERSION + '  (' + bytes.toLocaleString() + ' bytes, ' + ORDER.length + '개 모듈)');
+}
