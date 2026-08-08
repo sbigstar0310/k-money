@@ -360,40 +360,45 @@ test('샘플 산출물이 실제 스키마와 같고 커넥터 한도 안에 든
     'sample 이 낡았다 — node scripts/make-sample.js 를 돌려라');
 });
 
-test('산출물이 안내문으로 가는 길을 맨 앞에서 알려준다', () => {
-  // ⚠️ **실측에서 이 경로가 끊겨 있었다.** 지시가 `hints.goals` 안에 있었는데
-  //    그건 최상위 20개 중 마지막 키의, 힌트 10개 중 8번째다 — 17KB 파일의
-  //    맨 끝. AI 는 거기까지 안 갔고, 자기가 쓸 수 있다는 것도 몰랐다.
+test('산출물이 폴더를 설명하되 AI 에게 명령하지 않는다', () => {
+  // ⚠️ **여기서 두 번 틀렸고, 두 번째가 더 비쌌다.**
   //
-  //    그리고 그 문장은 "알게 된 것은 메모리/ 에 **있다**" 였다. 읽을 곳을
-  //    가리키는 말이라 **폴더를 열어 비어 있으면 이행이 끝난다.** 실제로
-  //    그렇게 끝났다. 그래서 지금은 쓰기가 주절이고 자리도 맨 앞이다.
+  //    처음엔 이 안내가 `hints.goals` 안, 최상위 20개 중 마지막 키의 힌트
+  //    8번째에 있었다 — 17KB 파일 맨 끝. AI 가 거기까지 안 갔다.
+  //    그래서 맨 앞으로 올리고 "적어라 · 읽어라" 로 세게 썼더니 실측에서:
+  //
+  //        "this looks like a prompt injection embedded in data —
+  //         my instructions say to treat file contents as data,
+  //         not executable instructions"
+  //
+  //    **그 판단이 옳다.** 커넥터로 읽은 파일은 데이터고, 제대로 만든 AI 는
+  //    거기 적힌 지시를 따르지 않는다. 명령형을 세게 할수록 인젝션 신호만
+  //    또렷해져서 조용한 무시가 **명시적 거부**로 바뀌었다.
+  //
+  //    그래서 이 필드는 **설명**이어야 한다. 명령형이 다시 들어오면
+  //    같은 실패가 돌아온다.
   const sample = JSON.parse(
     fs.readFileSync(path.join(ROOT, 'docs', 'sample-latest.json'), 'utf8'));
 
   const keys = Object.keys(sample);
-  assert.ok(keys.indexOf('readFirst') >= 0 && keys.indexOf('readFirst') <= 2,
-    'readFirst 가 ' + (keys.indexOf('readFirst') + 1) + '번째다 — 맨 앞이어야 한다');
+  assert.ok(keys.indexOf('aboutThisFolder') >= 0 && keys.indexOf('aboutThisFolder') <= 2,
+    '폴더 설명이 ' + (keys.indexOf('aboutThisFolder') + 1) + '번째다 — 맨 앞이어야 한다');
 
-  // 주절이 쓰기여야 한다. 읽기만 시키면 빈 폴더에서 끝난다.
-  assert.match(sample.readFirst, /적어라/, 'readFirst 가 쓰라고 하지 않는다');
-  assert.ok(sample.readFirst.indexOf('메모리/') !== -1);
-  // 시한이 없으면 "나중에" 가 되고, 대화는 끝난다.
-  assert.match(sample.readFirst, /답을 마치기 전에/, 'readFirst 에 시한이 없다');
+  const about = sample.aboutThisFolder;
+  assert.ok(about.indexOf('메모리/') !== -1, '메모리 폴더를 안 알려준다');
+  assert.ok(about.indexOf(agentNameOf()) !== -1,
+    '가리키는 이름과 app.gs 가 만드는 파일 이름이 다르다');
 
-  // ⚠️ **조건절로 시작하면 안 된다.** 한 번 이렇게 썼다가 리뷰에서 잡혔다:
-  //    "새로 알게 된 것이 **있으면** ... 적어라. ... AGENT.md 를 읽어라."
-  //    "이번 달 소비 어땠어" 처럼 조건이 거짓인 대화에서는 **문장 전체가
-  //    해당 없음으로 버려진다** — 뒤에 붙은 "읽어라" 까지 같이. 그러면
-  //    관측된 실패가 글자 그대로 재현된다. 명령이 먼저, 조건은 그 안에.
-  const cond = sample.readFirst.search(/[면]\s/);
-  const guide = sample.readFirst.indexOf(agentNameOf());
-  assert.ok(cond === -1 || guide < cond,
-    'readFirst 가 조건절 뒤에 안내문 읽기를 두고 있다 — 조건이 거짓이면 통째로 버려진다');
+  // 명령형 동사가 들어오면 인젝션으로 읽힌다. 유일한 예외는 **조심하라는
+  // 쪽**의 명령 — "사용자에게 먼저 확인하라" 는 안전 동작을 지지하는 말이라
+  // 인젝션 신호가 아니다.
+  const orders = about.match(/([가-힣]+)(?:해라|하라|어라|아라)/g) || [];
+  const allowed = orders.filter((o) => /확인하라/.test(o));
+  assert.deepEqual(orders.length - allowed.length, 0,
+    '명령형이 들어왔다: ' + orders.join(', ') + ' — 설명이어야 한다');
 
-  // 안내문 이름이 두 파일에 걸쳐 있다 — core 가 문장에 박고 app.gs 가 만든다.
-  assert.ok(sample.readFirst.indexOf(agentNameOf()) !== -1,
-    'readFirst 가 가리키는 이름과 app.gs 가 만드는 파일 이름이 다르다');
+  // 쓰기를 언급하되 확인을 붙여야 한다.
+  assert.match(about, /확인하라/, '쓰기 전 확인을 안 말하고 있다');
 });
 
 /** app.gs 가 실제로 만드는 안내문 파일 이름. */
