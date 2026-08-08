@@ -270,6 +270,25 @@ test('상태 칸이 템플릿과 main.gs 에서 같은 곳을 가리킨다', () 
     'main.gs 가 ' + checked[1] + ' 에 안 쓴다');
 });
 
+test('템플릿의 상태 줄이 상수가 가리키는 행에 있다', () => {
+  // rows 배열에 한 줄만 끼워 넣으면 이후가 전부 밀린다. 그런데 **오류가 안 난다** —
+  // 상태는 계속 B10 에 찍히고, 유저 화면의 '지금 상태' 자리는 첫 문구 그대로
+  // 남는다. 조용히 틀리는 종류라 사람이 눈으로 잡기 어렵다.
+  const tpl = fs.readFileSync(path.join(ROOT, 'appsscript', 'template.gs'), 'utf8');
+  const block = /var rows = \[([\s\S]*?)\n  \];/.exec(tpl);
+  assert.ok(block, 'template.gs 의 rows 배열을 못 찾았다');
+  const rows = block[1].split('\n').filter((l) => l.trim().startsWith('['));
+
+  const rowOf = (name) => Number(/[A-Z]+(\d+)/.exec(
+    new RegExp(name + " = '([A-Z]+\\d+)'").exec(tpl)[1])[1]);
+
+  // 상태 칸 바로 위는 '지금 상태' 머리글이어야 한다.
+  const statusRow = rowOf('TEMPLATE_STATUS_CELL');
+  assert.match(rows[statusRow - 2], /지금 상태/,
+    'B' + statusRow + ' 위가 "지금 상태" 가 아니다 — rows 에 줄이 끼었다');
+  assert.equal(rowOf('TEMPLATE_CHECKED_CELL'), statusRow + 1);
+});
+
 test('상태를 이름으로 찾은 시트에 쓴다', () => {
   // getSheets()[0] 만 쓰면 유저가 시트를 하나 추가하는 순간 남의 시트에 쓴다.
   assert.match(CODE, /getSheetByName\(STATUS_SHEET\)/);
