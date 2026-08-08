@@ -11,10 +11,20 @@
  *   (2) 못 믿을 값은 넣지 않는다   → null 이 아니라 **키 자체를 없앤다.**
  *                                    없는 숫자는 인용될 수 없다.
  *
- * ━━ 크기 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ * ━━ 커넥터에 대해 실측으로 확인한 것 ━━━━━━━━━━━━━━━━━━━━━━━━
  *
- * 실측: Claude Drive 커넥터는 19KB JSON 을 **빈 문자열로** 읽었다.
- * 그래서 거래 원본은 절대 넣지 않고, 목록은 전부 상한을 둔다.
+ * 1. JSON 은 **읽힌다.** 한때 "빈 문자열로 나온다" 고 기록해 뒀는데 틀렸다.
+ *    갓 만든 파일은 커넥터가 아직 처리하지 못해 잠시 비어 보일 뿐이고,
+ *    몇 분 뒤에는 정상적으로 읽힌다. 크기와도 MIME 과도 무관했다.
+ *
+ * 2. 다만 마크다운 특수문자가 이스케이프된다. 실측으로 확인된 대상:
+ *      [ ] < > ! \ # * _ ~ `
+ *    안전한 것: { } ( ) : ; , . ? / | + = % & @ $ " ' -
+ *    → JSON 의 뼈대({ } " : ,)는 멀쩡하고 배열 괄호만 \[ \] 가 된다.
+ *      엄격한 파서는 깨지지만 LLM 이 읽는 데는 지장이 없다.
+ *    → 식별자에 밑줄을 쓰지 않는 이유가 이것이다 (snake_case → camelCase).
+ *
+ * 3. 그래도 거래 원본은 넣지 않고 목록마다 상한을 둔다. 토큰과 가독성 문제다.
  */
 
 var KM = (globalThis.KM = globalThis.KM || {});
@@ -103,7 +113,7 @@ KM.aggregate = (function () {
       out.flow.savingsRate = Math.round((flow.net / flow.income) * 1000) / 1000;
     } else {
       out.flow.savingsRateOmitted = {
-        reason: 'unclassified_transfers',
+        reason: 'unclassifiedTransfers',
         unclassifiedGross: unclassified,
         recordedIncome: flow.income,
       };
@@ -218,7 +228,7 @@ KM.aggregate = (function () {
     var flags = [];
     if (Math.abs(tb.externalGross) >= material) {
       flags.push({
-        code: 'unclassified_external_transfers',
+        code: 'unclassifiedExternalTransfers',
         amountNet: tb.externalNet,
         amountGross: tb.externalGross,
         // 순액이 0이어도 총액은 클 수 있다. 700만 받고 700만 보내면
@@ -228,27 +238,27 @@ KM.aggregate = (function () {
     }
     if (Math.abs(tb.selfNet) >= material) {
       flags.push({
-        code: 'self_transfer_imbalance',
+        code: 'selfTransferImbalance',
         amount: tb.selfNet,
         note: '본인 계좌 간 이체 순액. 0이어야 정상이며 어긋나면 미연동 계좌가 있다',
       });
     }
     if (tb.selfMatchedByMask > 0) {
       flags.push({
-        code: 'owner_matched_by_masked_name',
+        code: 'ownerMatchedByMaskedName',
         count: tb.selfMatchedByMask,
         note: '가려진 이름으로 본인 판정된 건. 동명이인이면 본인/타인 구분이 뒤집힌다',
       });
     }
     if (extract.foreign && extract.foreign.length) {
       flags.push({
-        code: 'foreign_currency_excluded',
+        code: 'foreignCurrencyExcluded',
         count: extract.foreign.length,
         note: '원화가 아닌 거래는 합계에서 제외했다',
       });
     }
     if (!extract.snapshot) {
-      flags.push({ code: 'no_balance_sheet', note: '자산 현황이 없어 잔고 지표를 낼 수 없다' });
+      flags.push({ code: 'noBalanceSheet', note: '자산 현황이 없어 잔고 지표를 낼 수 없다' });
     }
     return { material: material, flags: flags };
   }

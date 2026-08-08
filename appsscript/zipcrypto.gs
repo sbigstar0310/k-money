@@ -184,70 +184,11 @@ function unzipEncrypted(zipBlob, password) {
 }
 
 
-// ── 검증 ───────────────────────────────────────────────────────────
-
-/**
- * STEP 4 — 실제 뱅샐 zip 을 푼다. step2 가 Drive 에 올려둔 파일을 쓴다.
- * 실행 전에 아래 PASSWORD 를 뱅샐에서 설정한 값으로 바꿔라.
- */
-function step4_decrypt() {
-  var PASSWORD = '0930';
-
-  Logger.log('=== STEP 4: ZipCrypto 해제 ===');
-
-  var folders = DriveApp.getFoldersByName('k-money');
-  if (!folders.hasNext()) { Logger.log('❌ k-money 폴더 없음. step2 를 먼저 실행하라.'); return; }
-  var folder = folders.next();
-
-  var zipFile = null;
-  var it = folder.getFiles();
-  while (it.hasNext()) {
-    var f = it.next();
-    if (f.getName().toLowerCase().indexOf('.zip') !== -1) { zipFile = f; break; }
-  }
-  if (!zipFile) { Logger.log('❌ zip 파일 없음. step2 를 먼저 실행하라.'); return; }
-
-  Logger.log('대상: ' + zipFile.getName() + ' (' + zipFile.getSize() + ' bytes)');
-
-  var t0 = new Date().getTime();
-  var files;
-  try {
-    files = unzipEncrypted(zipFile.getBlob(), PASSWORD);
-  } catch (e) {
-    Logger.log('❌ 실패: ' + e.message);
-    return;
-  }
-  var ms = new Date().getTime() - t0;
-
-  Logger.log('✅ 해제 성공 — ' + files.length + '개 파일, ' + ms + 'ms');
-  for (var i = 0; i < files.length; i++) {
-    Logger.log('   ' + files[i].getName() + '  (' + files[i].getBytes().length + ' bytes)');
-  }
-
-  // xlsx 를 Google Sheets 로 변환 — openpyxl 이식이 통째로 사라지는 지점
-  var xlsx = null;
-  for (var j = 0; j < files.length; j++) {
-    if (files[j].getName().toLowerCase().indexOf('.xlsx') !== -1) { xlsx = files[j]; break; }
-  }
-  if (!xlsx) { Logger.log('⚠️ xlsx 를 못 찾음'); return; }
-
-  try {
-    var converted = Drive.Files.create(
-      { name: 'k-money-parsed', mimeType: MimeType.GOOGLE_SHEETS, parents: [folder.getId()] },
-      xlsx
-    );
-    var ss = SpreadsheetApp.openById(converted.id);
-    var names = ss.getSheets().map(function (s) { return s.getName(); });
-    Logger.log('✅ Google Sheets 변환 성공 — 시트: ' + names.join(', '));
-
-    var ledger = ss.getSheetByName('가계부 내역');
-    if (ledger) {
-      Logger.log('   가계부 내역: ' + ledger.getLastRow() + '행 × ' + ledger.getLastColumn() + '열');
-      Logger.log('   헤더: ' + ledger.getRange(1, 1, 1, ledger.getLastColumn()).getValues()[0].join(' | '));
-    }
-    Logger.log('   URL: ' + ss.getUrl());
-  } catch (e) {
-    Logger.log('⚠️ Sheets 변환 실패: ' + e.message);
-    Logger.log('   → 서비스 메뉴에서 Drive API(고급 서비스)를 켜야 한다.');
-  }
-}
+// ── 참고 ───────────────────────────────────────────────────────────
+//
+// 예전에 여기 있던 step4_decrypt() 는 걷어냈다. 비밀번호를 코드에
+// 하드코딩하고 있었는데, 편집 이력에 남고 프로젝트를 복사·공유하는 순간
+// 같이 나간다. 지금은 main.gs 가 스크립트 속성에서 읽는다.
+//
+// 해제만 따로 시험해 보려면 main.gs 의 runOnceForce() 를 써라.
+// 실패하면 status.json 에 어느 단계에서 멈췄는지 남는다.

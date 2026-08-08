@@ -72,7 +72,7 @@ test('순액 0이어도 총액이 크면 미분류가 숨어 있다 — gross �
   assert.strictEqual(f.transfers.external.net, 0, '순액만 보면 아무 일도 없어 보인다');
   assert.strictEqual(f.transfers.external.gross, 14000000, '실제로는 1,400만원이 미분류');
   const codes = f.dataQuality.flags.map((x) => x.code);
-  assert.ok(codes.includes('unclassified_external_transfers'), '순액이 0이어도 플래그가 서야 한다');
+  assert.ok(codes.includes('unclassifiedExternalTransfers'), '순액이 0이어도 플래그가 서야 한다');
 });
 
 test('구두점이 붙은 본인 이름도 본인으로 본다 — "토스 성대규/" (실측 494,000원)', () => {
@@ -101,7 +101,7 @@ test('가려진 이름으로 본인 판정된 건은 불확실성으로 표시�
   assert.strictEqual(f.transfers.self.count, 1, '마스킹은 본인일 가능성이 높으니 채택하되');
   assert.strictEqual(f.transfers.self.matchedByMaskedName, 1, '동명이인일 수 있음을 밝힌다');
   const codes = f.dataQuality.flags.map((x) => x.code);
-  assert.ok(codes.includes('owner_matched_by_masked_name'));
+  assert.ok(codes.includes('ownerMatchedByMaskedName'));
 });
 
 
@@ -283,7 +283,7 @@ test('미분류 이체가 크면 저축률 키 자체를 만들지 않는다', (
   ]);
   assert.strictEqual(f.flow.savingsRate, undefined, 'null 이 아니라 키가 없어야 인용될 수 없다');
   assert.ok(f.flow.savingsRateOmitted);
-  assert.strictEqual(f.flow.savingsRateOmitted.reason, 'unclassified_transfers');
+  assert.strictEqual(f.flow.savingsRateOmitted.reason, 'unclassifiedTransfers');
 });
 
 test('데이터가 깨끗하면 저축률을 낸다', () => {
@@ -328,7 +328,7 @@ test('원화가 아닌 거래는 원화 합계에 섞지 않는다', () => {
   assert.strictEqual(ex.foreign.length, 1);
   const f = KM.aggregate.build(ex);
   assert.strictEqual(f.flow.expense, 10000, 'USD 100 이 100원으로 더해지면 안 된다');
-  assert.ok(f.dataQuality.flags.some((x) => x.code === 'foreign_currency_excluded'));
+  assert.ok(f.dataQuality.flags.some((x) => x.code === 'foreignCurrencyExcluded'));
 });
 
 test('행이 짧아도 죽지 않는다', () => {
@@ -350,7 +350,7 @@ test('현황 시트가 없어도 흐름 지표는 나온다', () => {
   const f = KM.aggregate.build(KM.parse.extract(H.sheets([H.expense('2025-01-01', 1000)], null)));
   assert.strictEqual(f.flow.expense, 1000);
   assert.strictEqual(f.balance, undefined);
-  assert.ok(f.dataQuality.flags.some((x) => x.code === 'no_balance_sheet'));
+  assert.ok(f.dataQuality.flags.some((x) => x.code === 'noBalanceSheet'));
 });
 
 test('거래가 하나도 없어도 죽지 않는다', () => {
