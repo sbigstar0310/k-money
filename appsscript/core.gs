@@ -762,12 +762,34 @@ KM.parse = (function () {
   }
 
   /**
+   * 날짜처럼 생겼는가.
+   *
+   * ⚠️ **`instanceof Date` 를 쓰면 안 된다.** 실측에서 이걸로 프로덕션이 깨졌다.
+   *
+   *    getValues() 가 만든 Date 는 **유저 스크립트 컨텍스트**의 것이고, 이 코드를
+   *    라이브러리로 분리하면 **다른 컨텍스트**에서 돈다. instanceof 는 그 경계를
+   *    넘지 못해 Date 가 Date 로 인식되지 않는다. 그러면 문자열 분기로 떨어져
+   *    "Fri Apr 03 2026 …".slice(0,10) = "Fri Apr 03" 이 날짜가 되고,
+   *    month() 가 "Fri Apr" 를 월로 잡아 **84개월짜리 산출물**이 나왔다.
+   *    합계는 날짜와 무관해 멀쩡하므로 눈으로는 안 걸린다.
+   *
+   *    한 프로젝트에 다 넣고 테스트하면 절대 재현되지 않는다. 라이브러리로
+   *    나눠야만 드러난다. → **모양으로 판별한다.**
+   */
+  function isDateLike(v) {
+    return !!v && typeof v === 'object' &&
+      typeof v.getFullYear === 'function' &&
+      typeof v.getMonth === 'function' &&
+      typeof v.getDate === 'function';
+  }
+
+  /**
    * 날짜 셀 → 'YYYY-MM-DD'.
    * Apps Script 는 Date 객체를, 픽스처 JSON 은 문자열을 준다.
    * UTC 변환을 거치면 하루가 밀 수 있어 로컬 연·월·일을 직접 읽는다.
    */
   function day(v) {
-    if (v instanceof Date) {
+    if (isDateLike(v)) {
       var y = v.getFullYear(), m = v.getMonth() + 1, d = v.getDate();
       return y + '-' + (m < 10 ? '0' : '') + m + '-' + (d < 10 ? '0' : '') + d;
     }
@@ -933,7 +955,7 @@ KM.parse = (function () {
   return {
     extract: extract, ledger: ledger, profile: profile,
     balances: balances, investments: investments,
-    cell: cell, text: text, num: num, day: day,
+    cell: cell, text: text, num: num, day: day, isDateLike: isDateLike,
     SchemaMismatch: SchemaMismatch,
   };
 })();

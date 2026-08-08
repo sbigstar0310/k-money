@@ -525,3 +525,23 @@ test('otherTotal 은 나머지의 합이 아니라 빠진 만큼이다', () => {
   const shown = f.merchants.items.reduce((s, m) => s + m.amount, 0);
   assert.strictEqual(shown + (f.merchants.otherTotal || 0), f.flow.expense);
 });
+
+test('다른 컨텍스트의 Date 도 날짜로 읽는다 — 라이브러리 경계에서 깨졌던 것', () => {
+  // Apps Script 라이브러리로 분리하면 getValues() 의 Date 는 다른 컨텍스트의
+  // 객체라 instanceof Date 가 false 가 된다. 그러면 문자열 분기로 떨어져
+  // "Fri Apr 03" 이 날짜가 되고 84개월짜리 산출물이 나온다.
+  // vm 으로 다른 realm 의 진짜 Date 를 만들어 재현한다.
+  const vm = require('node:vm');
+  const foreign = vm.runInNewContext('new Date(2026, 3, 3)');
+
+  assert.strictEqual(foreign instanceof Date, false, '전제: 경계를 넘으면 instanceof 가 깨진다');
+  assert.strictEqual(KM.parse.isDateLike(foreign), true);
+  assert.strictEqual(KM.parse.day(foreign), '2026-04-03');
+
+  // 파이프라인 전체에서도 통해야 한다
+  const sheets = H.sheets([H.expense('2025-01-15', 30000)]);
+  sheets['가계부 내역'][1][0] = vm.runInNewContext('new Date(2025, 0, 15)');
+  const f = KM.aggregate.build(KM.parse.extract(sheets));
+  assert.strictEqual(f.period.from, '2025-01-15');
+  assert.strictEqual(f.flow.monthly[0].month, '2025-01', '"Thu Jan" 이 월이 되면 안 된다');
+});
