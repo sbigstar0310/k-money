@@ -250,6 +250,24 @@ test('VERSION · package.json · CONTAINER_VERSION · README 가 같다', () => 
 
 // ── 유저에게 하는 안내가 실제로 존재하는가 ────────────────────────
 
+test('문제해결 표의 문구가 코드가 실제로 내는 말과 같다', () => {
+  // 리팩터링하면서 오류 문구를 다듬으면 표는 조용히 낡는다. 그러면 유저는
+  // 화면에 뜬 말을 문서에서 검색하고 못 찾는다 — 거기서 포기한다.
+  const md = fs.readFileSync(path.join(ROOT, 'docs', 'install.md'), 'utf8');
+  const app = fs.readFileSync(path.join(ROOT, 'appsscript', 'app.gs'), 'utf8');
+  const container = fs.readFileSync(path.join(ROOT, 'appsscript', 'container.gs'), 'utf8');
+  const source = app + container;
+
+  // 표에서 굵게 따옴표로 인용한 문구는 실제 메시지여야 한다.
+  const quoted = [...md.matchAll(/\| \*\*"([^"]+)"\*\*/g)].map((m) => m[1]);
+  assert.ok(quoted.length >= 3, '문제해결 표에서 인용문을 못 찾았다');
+  quoted.forEach((q) => {
+    // '…' 로 줄인 인용은 앞부분만 맞으면 된다.
+    const head = q.split('…')[0].trim();
+    assert.ok(source.indexOf(head) !== -1, '"' + head + '" 을 내는 코드가 없다');
+  });
+});
+
 test('CHANGELOG 에 현재 버전 항목이 있고 올릴지 여부를 밝힌다', () => {
   // 유저에게 "바뀐 것들을 보고 올릴지 정하세요" 라고 안내한다.
   // 여기가 비어 있으면 그 안내가 통째로 헛돈다.

@@ -117,19 +117,11 @@ AI에게 실제로 넘어가는 파일은 [이렇게 생겼어요](docs/sample-l
 
 ## 만드는 중이에요
 
-혼자 만드는 사이드 프로젝트예요. 제 데이터로 먼저 써보면서 다듬고 있어요.
+혼자 만드는 사이드 프로젝트예요. 제 돈으로 먼저 써보면서 다듬고 있어요.
 
 - [설치 안내](docs/install.md) — 처음 쓰는 분을 위한 안내
-- [결정 기록](docs/DECISIONS.md) — 왜 이렇게 만들었는지, 무엇을 뒤집었는지
-- [내부 구조](docs/internals.md) — 기술 스택과 파이프라인
-- [배포](docs/deploy.md) — 라이브러리 배포와 버전 갱신
-
-```sh
-npm test      # 회귀 테스트 48개
-npm run check # 빌드 + 테스트
-```
-
-집계 코어는 순수 JavaScript 한 벌이에요. node로 검증한 같은 파일이 Apps Script에서 돌아가요.
+- [바뀐 것들](CHANGELOG.md) — 버전마다 올려야 하는지 아닌지
+- [보안](SECURITY.md) — 어떤 위험이 있는지 숨기지 않고
 
 ## 믿을 수 있나
 
@@ -154,3 +146,32 @@ Gmail을 읽는 도구라 당연한 걱정이에요. 직접 확인하실 수 있
 ## 라이선스
 
 MIT © sbigstar. [LICENSE](./LICENSE) 파일을 참고하세요.
+
+---
+
+<details>
+<summary><b>개발자를 위해</b></summary>
+
+<br>
+
+집계 코어는 순수 JavaScript 한 벌이에요. **node로 검증한 같은 파일이 Apps Script에서 돌아갑니다** —
+두 벌로 갈라지면 반드시 어긋나고, 어긋난 걸 늦게 알게 되거든요.
+
+```sh
+npm test       # 회귀 테스트
+npm run check  # 빌드 + 테스트
+```
+
+```
+core/          집계 코어. 뱅샐도 구글도 모르는 순수 함수
+appsscript/
+  app.gs         파이프라인. 라이브러리에 있어서 고칠 수 있어요
+  container.gs   유저 시트 안의 사본. 한 번 복사되면 못 고쳐요
+  core.gs        core/ 의 빌드 산물
+```
+
+- [내부 구조](docs/internals.md) — 파이프라인과 데이터 흐름
+- [배포](docs/deploy.md) — 라이브러리 배포, 컨테이너 경계, 겪은 함정들
+- [결정 기록](docs/DECISIONS.md) — 왜 이렇게 만들었는지, 무엇을 뒤집었는지
+
+</details>
