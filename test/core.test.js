@@ -514,3 +514,14 @@ test('고정지출에 무엇이 들었는지 밝힌다 — 총액만 주면 월�
   assert.ok(labels.includes('월세') && labels.includes('스트리밍'),
     '실측: label 이 없으면 "고정지출 전액 끊으면 15년 빨라져" 가 나온다 (실제 11개월)');
 });
+
+test('otherTotal 은 나머지의 합이 아니라 빠진 만큼이다', () => {
+  // 전액 환불된 가맹점은 순액이 음수라 목록에서 빠진다. 그걸 "나머지의 합"으로
+  // 세면 검산이 안 맞는다 (실측 12,690원 초과). "전체 − 실린 것"으로 정의한다.
+  const txns = [H.expense('2025-01-01', 100000, { desc: 'A' }),
+                H.expense('2025-01-02', 50000, { desc: '전액환불' }),
+                H.refund('2025-01-03', 50000, { desc: '전액환불' })];
+  const f = build(txns);
+  const shown = f.merchants.items.reduce((s, m) => s + m.amount, 0);
+  assert.strictEqual(shown + (f.merchants.otherTotal || 0), f.flow.expense);
+});

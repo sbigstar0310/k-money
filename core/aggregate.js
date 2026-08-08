@@ -79,8 +79,8 @@ KM.aggregate = (function () {
       // 이체는 '내 계좌 간 이동'이라 self.net 은 0에 가까워야 정상이다.
       transfers: transferBlock(tb),
 
-      categories: capped(A.byCategory(txns), LIMITS.categories, 'category', 'amount'),
-      merchants: capped(A.byMerchant(txns), LIMITS.merchants, 'merchant', 'amount'),
+      categories: capped(A.byCategory(txns), LIMITS.categories, 'amount', flow.expense),
+      merchants: capped(A.byMerchant(txns), LIMITS.merchants, 'amount', flow.expense),
       categoryMonthly: matrix(txns, monthly),
       refunds: A.refunds(txns),
       recurring: recurringBlock(txns),
@@ -141,14 +141,21 @@ KM.aggregate = (function () {
     return rows;
   }
 
-  /** 목록을 자르되 **잘라낸 총액을 반드시 밝힌다.** */
-  function capped(list, limit, keyField, amountField) {
+  /**
+   * 목록을 자르되 **잘라낸 총액을 반드시 밝힌다.**
+   *
+   * ⚠️ otherTotal 은 "나머지의 합" 이 아니라 **"전체에서 빠진 만큼"** 이다.
+   *    합으로 정의하면 목록 만드는 쪽에 필터가 하나만 끼어도 검산이 깨진다.
+   *    실측: byMerchant 가 순액 음수(전액 환불된 가맹점)를 걸러서
+   *    merchants 합이 지출을 12,690원 넘었다. 빼기로 정의하면 구조적으로 안 깨진다.
+   */
+  function capped(list, limit, amountField, total) {
     var head = list.slice(0, limit);
-    var rest = list.slice(limit);
+    var shown = M.sum(head, function (x) { return x[amountField]; });
     var out = { items: head };
-    if (rest.length) {
-      out.otherCount = rest.length;
-      out.otherTotal = M.sum(rest, function (x) { return x[amountField]; });
+    if (list.length > limit || shown !== total) {
+      out.otherCount = Math.max(0, list.length - limit);
+      out.otherTotal = total - shown;
     }
     return out;
   }
@@ -237,7 +244,8 @@ KM.aggregate = (function () {
     });
     var all = M.assets(snap).slice().sort(function (a, b) { return b.amount - a.amount; });
     var head = all.slice(0, LIMITS.accounts);
-    var rest = all.slice(LIMITS.accounts);
+    var shown = M.sum(head, function (h) { return h.amount; });
+    var total = M.totalAssets(snap);
     var out = {
       netWorth: M.netWorth(snap),
       totalDebt: M.totalDebt(snap),
@@ -246,9 +254,9 @@ KM.aggregate = (function () {
         return { bucket: h.bucket, name: h.name, amount: h.amount };
       }),
     };
-    if (rest.length) {
-      out.otherAccountsCount = rest.length;
-      out.otherAccountsTotal = M.sum(rest, function (h) { return h.amount; });
+    if (all.length > LIMITS.accounts || shown !== total) {
+      out.otherAccountsCount = Math.max(0, all.length - LIMITS.accounts);
+      out.otherAccountsTotal = total - shown; // 합이 아니라 빠진 만큼
     }
     return out;
   }
