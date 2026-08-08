@@ -1,4 +1,4 @@
-# money-audit — 프로젝트 브리프
+# k-money — 프로젝트 브리프
 
 > 출처: claude.ai 웹 대화 (share/bbeebf45) 에서 확정된 내용을 옮김. 2026-08-08 기준.
 
@@ -35,8 +35,8 @@ Tier 2를 고른 결정적 근거: 웹 챗 컨테이너는
 
 온보딩 happy path:
 ```
-1. claude plugin marketplace add github.com/<you>/money-audit
-2. claude plugin install money-audit
+1. claude plugin marketplace add github.com/<you>/k-money
+2. claude plugin install k-money
 3. /reload-plugins
 4. /set-up          ← 에이전트가 손잡고 진행
 5. "내 계좌 감사해줘"

@@ -1,5 +1,5 @@
 /**
- * money-audit — ZipCrypto 복호화 (Apps Script V8)
+ * k-money — ZipCrypto 복호화 (Apps Script V8)
  *
  * 왜 직접 구현하는가:
  *   · Utilities.unzip() 은 암호 걸린 zip 을 못 푼다
@@ -195,8 +195,8 @@ function step4_decrypt() {
 
   Logger.log('=== STEP 4: ZipCrypto 해제 ===');
 
-  var folders = DriveApp.getFoldersByName('money-audit');
-  if (!folders.hasNext()) { Logger.log('❌ money-audit 폴더 없음. step2 를 먼저 실행하라.'); return; }
+  var folders = DriveApp.getFoldersByName('k-money');
+  if (!folders.hasNext()) { Logger.log('❌ k-money 폴더 없음. step2 를 먼저 실행하라.'); return; }
   var folder = folders.next();
 
   var zipFile = null;
@@ -233,7 +233,7 @@ function step4_decrypt() {
 
   try {
     var converted = Drive.Files.create(
-      { name: 'money-audit-parsed', mimeType: MimeType.GOOGLE_SHEETS, parents: [folder.getId()] },
+      { name: 'k-money-parsed', mimeType: MimeType.GOOGLE_SHEETS, parents: [folder.getId()] },
       xlsx
     );
     var ss = SpreadsheetApp.openById(converted.id);

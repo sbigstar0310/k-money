@@ -1,5 +1,5 @@
 /**
- * money-audit — Apps Script 자동화 검증 스크립트
+ * k-money — Apps Script 자동화 검증 스크립트
  *
  * 목적: "Gmail 에서 뱅샐 첨부를 찾아 Drive 에 올리는 자동화가 보장되는가" 를
  *      코드 한 줄 안 짜고 확인하는 것. 여기가 되면 파이프라인 전체의 토대가 선다.
@@ -21,7 +21,7 @@
 
 // 뱅샐 메일을 찾는 검색어. --dry-run 결과에 맞춰 조정한다.
 var GMAIL_QUERY = 'has:attachment filename:zip (뱅크샐러드 OR banksalad)';
-var DRIVE_FOLDER = 'money-audit';
+var DRIVE_FOLDER = 'k-money';
 
 
 /** STEP 1 — 런타임 확인. 권한 요청이 처음 뜨는 지점이다. */
@@ -157,5 +157,5 @@ function cleanup_removeTriggers() {
   for (var i = 0; i < triggers.length; i++) {
     ScriptApp.deleteTrigger(triggers[i]);
   }
-  Logger.log('트리거 ' + triggers.length + '개 삭제. Drive 의 money-audit 폴더는 직접 지워라.');
+  Logger.log('트리거 ' + triggers.length + '개 삭제. Drive 의 k-money 폴더는 직접 지워라.');
 }

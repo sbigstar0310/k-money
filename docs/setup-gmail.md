@@ -1,6 +1,6 @@
 # Gmail 첨부 다운로드 설정 — ⚠️ 개발자 전용
 
-> **이 문서는 Python 참조 구현(`money-audit ingest`) 전용이다. 유저는 이 절차를 하지 않는다.**
+> **이 문서는 Python 참조 구현(`k-money ingest`) 전용이다. 유저는 이 절차를 하지 않는다.**
 >
 > Apps Script 내장 서비스(GmailApp·DriveApp)는 **유저 OAuth 클라이언트를 요구하지 않는다** —
 > 스크립트가 유저 계정에서 유저 권한으로 실행되기 때문이다.
@@ -33,16 +33,16 @@
 ## 1. 프로젝트 생성
 
 1. https://console.cloud.google.com/projectcreate
-2. **프로젝트 이름**: `money-audit` (아무거나. 조직 없으면 위치는 "조직 없음")
+2. **프로젝트 이름**: `k-money` (아무거나. 조직 없으면 위치는 "조직 없음")
 3. **만들기** → 우측 상단 알림에서 생성 완료되면 **프로젝트 선택**
 
-> 이후 모든 화면에서 상단 프로젝트 선택기가 `money-audit`인지 계속 확인할 것.
+> 이후 모든 화면에서 상단 프로젝트 선택기가 `k-money`인지 계속 확인할 것.
 > 다른 프로젝트에 설정을 만들고 헤매는 게 가장 흔한 실수다.
 
 ## 2. Gmail API 사용 설정
 
 1. https://console.cloud.google.com/apis/library/gmail.googleapis.com
-2. 프로젝트가 `money-audit`인지 확인 → **사용(Enable)**
+2. 프로젝트가 `k-money`인지 확인 → **사용(Enable)**
 
 이 단계를 빼먹으면 나중에 `Gmail API has not been used in project ... before or it is disabled` 에러가 난다.
 
@@ -54,7 +54,7 @@ https://console.cloud.google.com/auth/overview → 처음이면 **시작하기(G
 
 | 항목 | 값 |
 |---|---|
-| 앱 이름 | `money-audit` (동의 화면에 표시됨. 아무거나) |
+| 앱 이름 | `k-money` (동의 화면에 표시됨. 아무거나) |
 | 사용자 지원 이메일 | 본인 Gmail |
 | 개발자 연락처 정보 | 본인 Gmail |
 
@@ -89,7 +89,7 @@ https://console.cloud.google.com/auth/overview → 처음이면 **시작하기(G
 
 1. Google Auth Platform → **Clients(클라이언트)** → **클라이언트 만들기**
 2. **애플리케이션 유형: 데스크톱 앱(Desktop app)** ← 웹 앱 아님. 리디렉션 URI를 물어보면 유형을 잘못 고른 것이다
-3. 이름: `money-audit-cli`
+3. 이름: `k-money-cli`
 4. **만들기** → 팝업에서 **JSON 다운로드**
 
 > 팝업을 닫아버렸어도 괜찮다. Clients 목록에서 해당 클라이언트 우측 **다운로드 아이콘**으로 다시 받을 수 있다.
@@ -97,7 +97,7 @@ https://console.cloud.google.com/auth/overview → 처음이면 **시작하기(G
 파일을 프로젝트로 옮긴다:
 
 ```sh
-cd ~/Desktop/02_Projects/money-audit
+cd ~/Desktop/02_Projects/k-money
 mkdir -p secrets && chmod 700 secrets
 mv ~/Downloads/client_secret_*.json secrets/client_secret.json
 chmod 600 secrets/client_secret.json
@@ -117,12 +117,12 @@ git check-ignore -v secrets/client_secret.json   # 무시되는지 확인
 ## 5. 첫 실행 — 인증
 
 ```sh
-uv run money-audit ingest --dry-run
+uv run k-money ingest --dry-run
 ```
 
 1. 브라우저가 자동으로 열린다
 2. 계정 선택 → **뱅샐 메일 받는 계정** 선택
-3. **"Google에서 확인하지 않은 앱입니다"** 경고 → **고급 → money-audit(안전하지 않음)으로 이동**
+3. **"Google에서 확인하지 않은 앱입니다"** 경고 → **고급 → k-money(안전하지 않음)으로 이동**
    - 본인이 방금 만든 테스트 앱이라 정상이다. 심사를 안 받았을 뿐
 4. 권한 요청: **"Gmail 메시지 및 설정 보기"** → **계속**
 5. 터미널에 `The authentication flow has completed` → 브라우저 탭 닫아도 됨
@@ -162,7 +162,7 @@ Gmail 검색 문법이 그대로 통한다: `newer_than:60d`, `subject:내보내
 
 ```sh
 rm secrets/gmail_token.json
-uv run money-audit ingest --dry-run   # 브라우저 재인증
+uv run k-money ingest --dry-run   # 브라우저 재인증
 ```
 
 **"앱 게시"로 해결되지 않는다.** `gmail.readonly` 는 Google이 **제한된 범위(Restricted scope)**
@@ -182,7 +182,7 @@ uv run money-audit ingest --dry-run   # 브라우저 재인증
 ## 8. 실제 인제스트
 
 ```sh
-uv run money-audit ingest
+uv run k-money ingest
 ```
 
 최신 첨부를 `data/raw/` 에 저장 → `.env` 의 비밀번호로 해제해 `data/extracted/` 에 넣고 →

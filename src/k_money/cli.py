@@ -1,4 +1,4 @@
-"""money-audit CLI — 인제스트 파이프라인 검증용."""
+"""k-money CLI — 인제스트 파이프라인 검증용."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ import logging
 import sys
 from pathlib import Path
 
-from money_audit.config import load_config
-from money_audit.ingest import probe, unpack
-from money_audit.ingest import pipeline as ingest_pipeline
+from k_money.config import load_config
+from k_money.ingest import probe, unpack
+from k_money.ingest import pipeline as ingest_pipeline
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -56,7 +56,7 @@ def cmd_probe(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="money-audit")
+    parser = argparse.ArgumentParser(prog="k-money")
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
 

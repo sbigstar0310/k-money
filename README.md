@@ -1,4 +1,4 @@
-# money-audit
+# k-money
 
 > **1억, 진짜로 가능한지 네 숫자로 알려준다.**
 >
@@ -239,7 +239,7 @@ Apps Script 구현의 **스펙이자 검증 기준**. 실데이터 회귀 테스
 ### 산출물 레이아웃
 
 ```
-Drive/money-audit/
+Drive/k-money/
 ├── report-YYYY-MM-DD.md        사람이 읽는 리포트
 ├── snapshot-YYYY-MM-DD.json    계좌별 잔액, 종목별 손익
 ├── ledger-summary.json         월별 집계 (계산 완료)
@@ -368,10 +368,10 @@ LLM은 이미 확정된 숫자를 읽고 해석·대화만 한다.**
 
 ```sh
 uv sync
-uv run money-audit ingest --dry-run   # 후보 메일만 확인
-uv run money-audit ingest             # 수집 → 해제 → 스키마 출력
-uv run money-audit unpack <zip>       # 로컬 zip 만 검증
-uv run money-audit probe <xlsx>       # 시트·헤더·샘플 확인
+uv run k-money ingest --dry-run   # 후보 메일만 확인
+uv run k-money ingest             # 수집 → 해제 → 스키마 출력
+uv run k-money unpack <zip>       # 로컬 zip 만 검증
+uv run k-money probe <xlsx>       # 시트·헤더·샘플 확인
 ```
 
 > ⚠️ `.env`, `secrets/`, `data/` 는 gitignore 된다. **금융 데이터와 시크릿을 커밋하지 말 것.**

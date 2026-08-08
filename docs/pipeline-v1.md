@@ -69,7 +69,7 @@ LLM에게 원본 거래 2,456건을 던지면 **함정 세 개를 매번 새로 
 그래서 **Apps Script가 계산까지 끝내고, LLM은 읽고 해석만 한다.**
 
 ```
-Drive/money-audit/
+Drive/k-money/
 ├── report-YYYY-MM-DD.md        사람이 읽는 리포트 (푸시 알림에 붙는 것)
 ├── snapshot-YYYY-MM-DD.json    계좌별 잔액, 종목별 원금·평가·수익률
 ├── ledger-summary.json         월별 수입·지출·고정/변동 (계산 완료)

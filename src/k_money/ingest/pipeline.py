@@ -9,8 +9,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from money_audit.config import Config
-from money_audit.ingest import gmail, probe, unpack
+from k_money.config import Config
+from k_money.ingest import gmail, probe, unpack
 
 log = logging.getLogger(__name__)
 
