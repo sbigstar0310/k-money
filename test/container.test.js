@@ -289,8 +289,21 @@ test('CHANGELOG 에 현재 버전 항목이 있고 올릴지 여부를 밝힌다
 
   const section = log.slice(head, log.indexOf('\n## ', head + 1));
   assert.match(section, /🔴|🟡|⚪/, '올려야 하는지 아닌지를 안 밝혔다');
-  // 라이브러리 배포 번호(정수)도 적어야 유저가 드롭다운에서 고를 수 있다.
-  assert.match(section, /라이브러리 버전 `\d+`/, '라이브러리 배포 번호가 없다');
+
+  // ⚠️ 배포 번호는 **배포한 뒤에** 안다. 미리 적으려다 두 번 연속 틀렸고
+  //    (3인 줄 알았는데 4, 5인 줄 알았는데 7), 틀리면 유저는 오류 없이
+  //    옛 코드로 돈다. 그래서 최신 항목만 '대기' 를 허용한다.
+  assert.match(section, /라이브러리 버전 (`\d+`|대기)/, '라이브러리 배포 번호 자리가 없다');
+});
+
+test('지난 CHANGELOG 항목에는 배포 번호가 다 적혀 있다', () => {
+  // '대기' 를 최신 항목에 허용했으니, 그게 그대로 굳는 걸 막아야 한다.
+  const log = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
+  const heads = [...log.matchAll(/^## (\d+\.\d+\.\d+) — .*라이브러리 버전 (.+)$/gm)];
+  assert.ok(heads.length >= 2, 'CHANGELOG 항목을 못 읽었다');
+  heads.slice(1).forEach((m) => {
+    assert.match(m[2], /`\d+`/, m[1] + ' 의 배포 번호가 아직 대기다');
+  });
 });
 
 test('문서가 가리키는 상대 링크가 실제로 있다', () => {
