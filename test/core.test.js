@@ -413,6 +413,34 @@ test('산출물에 원본 거래가 실리지 않는다 — 커넥터 19KB 절�
 });
 
 
+// ── 부채 ───────────────────────────────────────────────────────────
+
+test('부채를 개별로 내보낸다 — 총액만으로는 대화가 안 된다', () => {
+  // 사회 초년생에게 학자금·전세대출은 기본값에 가깝다. 총액만 주면
+  // "빚 6,200만원" 까지만 말할 수 있고 자기 상황을 올릴 수가 없다.
+  const facts = build([H.income('2026-06-01', 2500000)], {
+    assets: [{ group: '자유입출금 자산', name: '주거래통장', amount: 3000000 }],
+    debts: [
+      { group: '신용대출', name: '학자금대출', amount: 12000000 },
+      { group: '전세자금대출', name: '전세대출', amount: 50000000 },
+    ],
+  });
+  assert.equal(facts.balance.totalDebt, 62000000);
+  assert.equal(facts.balance.netWorth, -59000000, '부채가 순자산에서 빠져야 한다');
+  assert.deepEqual(facts.balance.debts.map((d) => d.name), ['전세대출', '학자금대출'],
+    '큰 것부터 와야 한다');
+  // 자산 목록에 부채가 섞이면 총자산이 부풀어 보인다.
+  assert.equal(facts.balance.accounts.filter((a) => a.name.indexOf('대출') !== -1).length, 0);
+});
+
+test('부채가 없으면 debts 를 만들지 않는다', () => {
+  // 빈 배열을 내보내면 LLM 이 "부채 정보가 있다" 로 읽는다.
+  const facts = build([H.income('2026-06-01', 100)],
+    { assets: [{ group: '자유입출금 자산', name: '통장', amount: 100 }] });
+  assert.equal(facts.balance.debts, undefined);
+  assert.equal(facts.balance.totalDebt, 0);
+});
+
 // ── 소스 위생 ──────────────────────────────────────────────────────
 
 test('소스에 NUL 바이트가 없다 — 두 번 당한 함정이다', () => {

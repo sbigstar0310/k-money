@@ -248,6 +248,49 @@ test('VERSION · package.json · CONTAINER_VERSION · README 가 같다', () => 
   assert.equal(shown[1], fileVersion, 'README 의 버전이 뒤처졌다');
 });
 
+// ── 유저에게 하는 안내가 실제로 존재하는가 ────────────────────────
+
+test('CHANGELOG 에 현재 버전 항목이 있고 올릴지 여부를 밝힌다', () => {
+  // 유저에게 "바뀐 것들을 보고 올릴지 정하세요" 라고 안내한다.
+  // 여기가 비어 있으면 그 안내가 통째로 헛돈다.
+  const version = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').trim();
+  const log = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
+  const head = log.indexOf('## ' + version);
+  assert.notEqual(head, -1, 'CHANGELOG 에 ' + version + ' 항목이 없다');
+
+  const section = log.slice(head, log.indexOf('\n## ', head + 1));
+  assert.match(section, /🔴|🟡|⚪/, '올려야 하는지 아닌지를 안 밝혔다');
+  // 라이브러리 배포 번호(정수)도 적어야 유저가 드롭다운에서 고를 수 있다.
+  assert.match(section, /라이브러리 버전 `\d+`/, '라이브러리 배포 번호가 없다');
+});
+
+test('문서가 가리키는 상대 링크가 실제로 있다', () => {
+  // 깨진 링크는 "관리 안 되는 저장소" 신호다. 내용보다 먼저 읽힌다.
+  const docs = ['README.md', 'CHANGELOG.md', 'SECURITY.md',
+    'docs/install.md', 'docs/deploy.md'];
+  const missing = [];
+  docs.forEach((rel) => {
+    const dir = path.dirname(path.join(ROOT, rel));
+    const text = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+    [...text.matchAll(/\]\(([^)#:]+\.md)(#[^)]*)?\)/g)].forEach((m) => {
+      if (!fs.existsSync(path.resolve(dir, m[1]))) missing.push(rel + ' → ' + m[1]);
+    });
+  });
+  assert.deepEqual(missing, []);
+});
+
+test('샘플 산출물이 실제 스키마와 같고 커넥터 한도 안에 든다', () => {
+  // 설치 전에 "뭘 넘기게 되는지" 보여주는 유일한 파일이다.
+  // 스키마가 바뀌었는데 여기가 옛날 모양이면 그 안내가 거짓이 된다.
+  const sample = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'docs', 'sample-latest.json'), 'utf8'));
+  const KM = require('./helpers').loadCore();
+  assert.equal(sample.schema, KM.aggregate.SCHEMA, '샘플이 옛 스키마다 — 다시 만들어라');
+  assert.ok(JSON.stringify(sample).length < 40000, '커넥터가 못 읽을 만큼 크다');
+  // 실데이터를 실수로 커밋하는 걸 막는다.
+  assert.equal(sample.sourceMessageId, 'sample');
+});
+
 // ── 매니페스트가 코드와 맞는가 ────────────────────────────────────
 
 /**

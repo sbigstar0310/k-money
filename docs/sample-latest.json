@@ -1,0 +1,584 @@
+{
+  "schema": "k-money/facts@2",
+  "source": "banksalad/v1",
+  "generatedFor": "2026-06-30",
+  "period": {
+    "from": "2025-07-01",
+    "to": "2026-06-28",
+    "days": 363
+  },
+  "flow": {
+    "income": 31100000,
+    "expense": 17288850,
+    "net": 13811150,
+    "avgMonthlyExpense": 1449638,
+    "monthly": [
+      {
+        "month": "2025-07",
+        "income": 2450000,
+        "expense": 1245500,
+        "net": 1204500
+      },
+      {
+        "month": "2025-08",
+        "income": 2450000,
+        "expense": 1248000,
+        "net": 1202000
+      },
+      {
+        "month": "2025-09",
+        "income": 2450000,
+        "expense": 1277200,
+        "net": 1172800
+      },
+      {
+        "month": "2025-10",
+        "income": 2450000,
+        "expense": 1236200,
+        "net": 1213800
+      },
+      {
+        "month": "2025-11",
+        "income": 2450000,
+        "expense": 1214750,
+        "net": 1235250
+      },
+      {
+        "month": "2025-12",
+        "income": 2450000,
+        "expense": 1236500,
+        "net": 1213500
+      },
+      {
+        "month": "2026-01",
+        "income": 2600000,
+        "expense": 1240050,
+        "net": 1359950
+      },
+      {
+        "month": "2026-02",
+        "income": 2600000,
+        "expense": 1728500,
+        "net": 871500
+      },
+      {
+        "month": "2026-03",
+        "income": 2600000,
+        "expense": 1250200,
+        "net": 1349800
+      },
+      {
+        "month": "2026-04",
+        "income": 2600000,
+        "expense": 3151200,
+        "net": -551200
+      },
+      {
+        "month": "2026-05",
+        "income": 3400000,
+        "expense": 1241700,
+        "net": 2158300
+      },
+      {
+        "month": "2026-06",
+        "income": 2600000,
+        "expense": 1219050,
+        "net": 1380950,
+        "partial": true,
+        "daysObserved": 28
+      }
+    ],
+    "savingsRate": 0.444
+  },
+  "pace": {
+    "monthly": 1158039,
+    "monthlyExSpikes": 1358269,
+    "observedMonths": 11.9
+  },
+  "transfers": {
+    "self": {
+      "net": -300000,
+      "count": 1,
+      "matchedByMaskedName": 0
+    },
+    "external": {
+      "net": 0,
+      "gross": 0,
+      "in": 0,
+      "out": 0,
+      "count": 0,
+      "topInflows": [],
+      "topOutflows": []
+    }
+  },
+  "categories": {
+    "items": [
+      {
+        "category": "주거/통신",
+        "amount": 8100000
+      },
+      {
+        "category": "쇼핑",
+        "amount": 3186000
+      },
+      {
+        "category": "식비",
+        "amount": 2781000
+      },
+      {
+        "category": "건강",
+        "amount": 828000
+      },
+      {
+        "category": "문화/여가",
+        "amount": 745800
+      },
+      {
+        "category": "생활",
+        "amount": 507600
+      },
+      {
+        "category": "여행",
+        "amount": 450000
+      },
+      {
+        "category": "금융",
+        "amount": 384000
+      },
+      {
+        "category": "교통",
+        "amount": 306450
+      }
+    ]
+  },
+  "merchants": {
+    "items": [
+      {
+        "merchant": "월세",
+        "category": "주거/통신",
+        "amount": 7440000,
+        "count": 12
+      },
+      {
+        "merchant": "노트북",
+        "category": "쇼핑",
+        "amount": 1890000,
+        "count": 1
+      },
+      {
+        "merchant": "무신사",
+        "category": "쇼핑",
+        "amount": 1296000,
+        "count": 27
+      },
+      {
+        "merchant": "고깃집",
+        "category": "식비",
+        "amount": 864000,
+        "count": 27
+      },
+      {
+        "merchant": "헬스장",
+        "category": "건강",
+        "amount": 828000,
+        "count": 12
+      },
+      {
+        "merchant": "포차",
+        "category": "식비",
+        "amount": 729000,
+        "count": 27
+      },
+      {
+        "merchant": "SKT",
+        "category": "주거/통신",
+        "amount": 660000,
+        "count": 12
+      },
+      {
+        "merchant": "배달의민족",
+        "category": "식비",
+        "amount": 486000,
+        "count": 27
+      },
+      {
+        "merchant": "제주항공",
+        "category": "여행",
+        "amount": 450000,
+        "count": 1
+      },
+      {
+        "merchant": "CGV",
+        "category": "문화/여가",
+        "amount": 405000,
+        "count": 27
+      },
+      {
+        "merchant": "실손보험",
+        "category": "금융",
+        "amount": 384000,
+        "count": 12
+      },
+      {
+        "merchant": "다이소",
+        "category": "생활",
+        "amount": 324000,
+        "count": 27
+      }
+    ],
+    "otherCount": 8,
+    "otherTotal": 1532850
+  },
+  "categoryMonthly": {
+    "months": [
+      "2025-07",
+      "2025-08",
+      "2025-09",
+      "2025-10",
+      "2025-11",
+      "2025-12",
+      "2026-01",
+      "2026-02",
+      "2026-03",
+      "2026-04",
+      "2026-05",
+      "2026-06"
+    ],
+    "rows": [
+      {
+        "category": "주거/통신",
+        "amounts": [
+          675000,
+          675000,
+          675000,
+          675000,
+          675000,
+          675000,
+          675000,
+          675000,
+          675000,
+          675000,
+          675000,
+          675000
+        ]
+      },
+      {
+        "category": "쇼핑",
+        "amounts": [
+          96000,
+          96000,
+          144000,
+          96000,
+          96000,
+          96000,
+          96000,
+          144000,
+          96000,
+          2034000,
+          96000,
+          96000
+        ]
+      },
+      {
+        "category": "식비",
+        "amounts": [
+          233000,
+          247500,
+          238500,
+          233500,
+          222500,
+          224000,
+          238000,
+          233000,
+          247500,
+          222500,
+          224000,
+          217000
+        ]
+      },
+      {
+        "category": "건강",
+        "amounts": [
+          69000,
+          69000,
+          69000,
+          69000,
+          69000,
+          69000,
+          69000,
+          69000,
+          69000,
+          69000,
+          69000,
+          69000
+        ]
+      },
+      {
+        "category": "문화/여가",
+        "amounts": [
+          73400,
+          58400,
+          58400,
+          58400,
+          58400,
+          73400,
+          58400,
+          58400,
+          58400,
+          58400,
+          73400,
+          58400
+        ]
+      },
+      {
+        "category": "생활",
+        "amounts": [
+          44400,
+          37600,
+          37600,
+          49600,
+          37600,
+          44400,
+          37600,
+          44400,
+          49600,
+          37600,
+          49600,
+          37600
+        ]
+      },
+      {
+        "category": "여행",
+        "amounts": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          450000,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "category": "금융",
+        "amounts": [
+          32000,
+          32000,
+          32000,
+          32000,
+          32000,
+          32000,
+          32000,
+          32000,
+          32000,
+          32000,
+          32000,
+          32000
+        ]
+      }
+    ]
+  },
+  "refunds": {
+    "count": 0,
+    "total": 0
+  },
+  "recurring": {
+    "activeMonthlyTotal": 1196700,
+    "activeCount": 18,
+    "inactiveCount": 0,
+    "items": [
+      {
+        "label": "월세",
+        "months": 12,
+        "firstMonth": "2025-07",
+        "lastMonth": "2026-06",
+        "monthlyMedian": 620000,
+        "observedTotal": 7440000,
+        "active": true
+      },
+      {
+        "label": "무신사",
+        "months": 12,
+        "firstMonth": "2025-07",
+        "lastMonth": "2026-06",
+        "monthlyMedian": 96000,
+        "observedTotal": 1296000,
+        "active": true
+      },
+      {
+        "label": "헬스장",
+        "months": 12,
+        "firstMonth": "2025-07",
+        "lastMonth": "2026-06",
+        "monthlyMedian": 69000,
+        "observedTotal": 828000,
+        "active": true
+      },
+      {
+        "label": "고깃집",
+        "months": 12,
+        "firstMonth": "2025-07",
+        "lastMonth": "2026-06",
+        "monthlyMedian": 64000,
+        "observedTotal": 864000,
+        "active": true
+      },
+      {
+        "label": "SKT",
+        "months": 12,
+        "firstMonth": "2025-07",
+        "lastMonth": "2026-06",
+        "monthlyMedian": 55000,
+        "observedTotal": 660000,
+        "active": true
+      },
+      {
+        "label": "포차",
+        "months": 12,
+        "firstMonth": "2025-07",
+        "lastMonth": "2026-06",
+        "monthlyMedian": 54000,
+        "observedTotal": 729000,
+        "active": true
+      },
+      {
+        "label": "배달의민족",
+        "months": 12,
+        "firstMonth": "2025-07",
+        "lastMonth": "2026-06",
+        "monthlyMedian": 36000,
+        "observedTotal": 486000,
+        "active": true
+      },
+      {
+        "label": "실손보험",
+        "months": 12,
+        "firstMonth": "2025-07",
+        "lastMonth": "2026-06",
+        "monthlyMedian": 32000,
+        "observedTotal": 384000,
+        "active": true
+      },
+      {
+        "label": "CGV",
+        "months": 12,
+        "firstMonth": "2025-07",
+        "lastMonth": "2026-06",
+        "monthlyMedian": 30000,
+        "observedTotal": 405000,
+        "active": true
+      },
+      {
+        "label": "다이소",
+        "months": 12,
+        "firstMonth": "2025-07",
+        "lastMonth": "2026-06",
+        "monthlyMedian": 24000,
+        "observedTotal": 324000,
+        "active": true
+      },
+      {
+        "label": "백반집",
+        "months": 12,
+        "firstMonth": "2025-07",
+        "lastMonth": "2026-06",
+        "monthlyMedian": 22000,
+        "observedTotal": 297000,
+        "active": true
+      },
+      {
+        "label": "카카오T",
+        "months": 12,
+        "firstMonth": "2025-07",
+        "lastMonth": "2026-06",
+        "monthlyMedian": 19600,
+        "observedTotal": 264600,
+        "active": true
+      }
+    ]
+  },
+  "spikes": [
+    {
+      "category": "쇼핑",
+      "month": "2026-04",
+      "amount": 2034000,
+      "baseline": 96000,
+      "excess": 1938000,
+      "ratio": 21.2
+    }
+  ],
+  "balance": {
+    "netWorth": 1790000,
+    "totalDebt": 11400000,
+    "buckets": {
+      "cash": 2840000,
+      "investment": 3150000,
+      "other": 7200000
+    },
+    "accounts": [
+      {
+        "bucket": "other",
+        "name": "청년희망적금",
+        "amount": 7200000
+      },
+      {
+        "bucket": "investment",
+        "name": "연금저축펀드",
+        "amount": 3150000
+      },
+      {
+        "bucket": "cash",
+        "name": "주거래통장",
+        "amount": 2840000
+      }
+    ],
+    "debts": [
+      {
+        "group": "신용대출",
+        "name": "학자금대출",
+        "amount": 11400000
+      }
+    ]
+  },
+  "cash": {
+    "total": 2840000,
+    "monthsOfExpense": 2
+  },
+  "investments": {
+    "bucketTotal": 3150000,
+    "unpricedValue": 0,
+    "unpricedNote": "CMA·예수금 등 원금 정보가 없어 수익률 계산에서 제외해야 하는 금액",
+    "holdings": [
+      {
+        "name": "TDF2050",
+        "broker": "미래에셋",
+        "principal": 3000000,
+        "value": 3150000
+      }
+    ]
+  },
+  "snapshotAge": 27,
+  "dataQuality": {
+    "material": 864443,
+    "materialNote": "지출의 5%. 이 미만은 보고하지 않았다",
+    "flags": []
+  },
+  "hints": {
+    "signs": "금액은 내 지갑 기준이다. 들어오면 +, 나가면 −. expense 합계는 이미 부호를 뒤집고 환불을 차감한 순액이다.",
+    "transfers": "이체는 수입에도 지출에도 포함되지 않는다. 본인 계좌 간 이동이므로 self.net 은 0에 가까워야 한다.",
+    "pace": "pace.monthly = (수입 − 지출 + 남과 오간 이체 순액) ÷ 관측개월. 본인 계좌 간 이체 순액은 더하지 않는다 — 새로 생긴 돈이 아니다. 이 값을 직접 다시 유도하지 마라.",
+    "derived": "합계·차액·비율·연환산은 여기 있는 숫자로 계산해 써라. 다만 pace 와 avgMonthlyExpense 는 이미 보정된 값이니 그대로 쓴다.",
+    "truncation": "otherTotal·otherAccountsTotal·external.other 는 목록에서 잘려나간 나머지다. 합계를 검산할 때 같이 더해라.",
+    "recurring": "recurring 은 금액이 일정한 모든 지출을 잡는다 — 월세·식비도 들어간다. items 의 label 을 보고 구독과 생활비를 구분해라.",
+    "goals": "유저가 목표를 말하지 않았다면 5천만원·1억 같은 금액을 예시로 먼저 제시해 보라. 목표 금액을 정하는 건 유저와 너의 일이고, 정해지면 profile.goals 에 적어 두면 다음에도 이어진다.",
+    "scope": "이 도구는 사실·계산·비교까지만 한다. 상품 추천이나 매매 판단은 하지 않는다.",
+    "currency": "KRW. 원 단위 정수."
+  },
+  "generatedAt": "2026-06-30T22:00:00.000Z",
+  "sourceMessageId": "sample"
+}

@@ -1113,7 +1113,7 @@ KM.aggregate = (function () {
   var A = KM.analyze;
 
   var SCHEMA = 'k-money/facts@2';
-  var LIMITS = { parties: 8, spikes: 5, recurring: 12, categories: 12, merchants: 12, accounts: 15, matrixCategories: 8 };
+  var LIMITS = { parties: 8, spikes: 5, recurring: 12, categories: 12, merchants: 12, accounts: 15, debts: 10, matrixCategories: 8 };
 
   // 이 아래면 보고하지 않는다. **지출** 기준인 것이 중요하다 — 지금 문제가
   // '수입이 덜 잡힌다' 인데 그 수입으로 문턱을 잡으면 결함이 자기 탐지 문턱을
@@ -1331,6 +1331,28 @@ KM.aggregate = (function () {
     if (all.length > LIMITS.accounts || shown !== total) {
       out.otherAccountsCount = Math.max(0, all.length - LIMITS.accounts);
       out.otherAccountsTotal = total - shown; // 합이 아니라 빠진 만큼
+    }
+
+    // ── 부채도 **개별로** 내보낸다 ────────────────────────────────
+    //
+    // 전에는 totalDebt 합계 하나뿐이었다. 그러면 "빚이 1,200만원" 까지만
+    // 말할 수 있고 "학자금대출이 얼마, 전세대출이 얼마" 는 못 한다.
+    // 사회 초년생에게 학자금·전세대출은 기본값에 가까운데, 그 사람은
+    // 자기 상황을 대화에 올릴 수가 없었다.
+    //
+    // 갚는 순서나 방법은 여기서 정하지 않는다 — 금리·상환조건에 달렸고
+    // 그건 우리가 가진 데이터에 없다. **무엇이 얼마인지까지만** 준다.
+    var debts = M.debts(snap).slice().sort(function (a, b) { return b.amount - a.amount; });
+    if (debts.length) {
+      var shownDebts = debts.slice(0, LIMITS.debts);
+      out.debts = shownDebts.map(function (h) {
+        return { group: h.group, name: h.name, amount: h.amount };
+      });
+      var shownDebtTotal = M.sum(shownDebts, function (h) { return h.amount; });
+      if (debts.length > LIMITS.debts) {
+        out.otherDebtsCount = debts.length - LIMITS.debts;
+        out.otherDebtsTotal = out.totalDebt - shownDebtTotal;
+      }
     }
     return out;
   }
