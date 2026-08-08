@@ -386,8 +386,12 @@ test('process — 끝까지 돌면 최신본과 원본 zip 이 남는다', () =>
 
   const folder = env._root.getFoldersByName(A.CFG.folderName).next();
   assert.ok(folder._files.has(A.CFG.latestName), A.CFG.latestName + ' 이 없다');
-  assert.ok(folder._files.has(A.historyName('2026-06-11')));
+  // ⚠️ 히스토리 이름은 **데이터의 마지막 날**(6/10)이다. 메일 받은 날(6/11)이
+  //    아니다 — 그러면 readPrevious 의 비교 기준과 어긋나 자기 자신과 비교한다.
+  assert.ok(folder._files.has(A.historyName('2026-06-10')),
+    '히스토리 이름이 데이터 날짜가 아니다: ' + [...folder._files.keys()].join(', '));
   const raw = folder.getFoldersByName('raw').next();
+  // 원본 zip 은 메일 받은 날로 남긴다 — 언제 받은 파일인지가 여기선 중요하다.
   assert.ok(raw._files.has('2026-06-11.zip'), '원본 zip 을 안 남겼다');
 
   const facts = JSON.parse(folder._files.get(A.CFG.latestName).getBlob().getDataAsString());
@@ -421,6 +425,34 @@ test('process — 두 번 돌려도 같은 날 파일이 늘어나지 않는다'
   A.process(env, { force: true });
   const after2 = env._root.getFoldersByName(A.CFG.folderName).next()._files.size;
   assert.equal(after2, after1, '같은 날인데 파일이 늘었다');
+});
+
+test('모든 실행 경로가 잠금을 지난다', () => {
+  // 예전엔 runOnceForce 만 잠금 없이 돌았고, 그게 하필 컨테이너에 있어서
+  // 이미 사본을 뜬 사람에게는 영영 못 고치는 상태였다.
+  const A = loadApp();
+  ['runDaily', 'runForced'].forEach((fn) => {
+    let locked = false;
+    const env = fakeEnv({
+      lock: { tryLock: () => { locked = true; return false; }, releaseLock() {} },
+    });
+    const r = A[fn](env);
+    assert.ok(locked, fn + ' 이 잠금을 안 잡는다');
+    assert.equal(r.step, 'busy');
+  });
+});
+
+test('runForced 는 이미 처리한 메일도 다시 본다', () => {
+  const A = loadApp({ unzipEncrypted() { throw new Error('여기까지 왔으면 통과'); } });
+  const env = fakeEnv({
+    props: propsStub({
+      BANKSALAD_ZIP_PASSWORD: '0930',
+      PROCESSED_MESSAGE_IDS: JSON.stringify(['seen']),
+    }),
+    gmail: { search: () => [{ getMessages: () => [fakeMessage('seen', new Date(), 'a.zip')] }] },
+  });
+  assert.equal(A.runDaily(env).step, 'idle', '평소엔 건너뛴다');
+  assert.equal(A.runForced(env).step, 'decrypt', 'force 면 다시 본다');
 });
 
 test('runDaily — 이미 돌고 있으면 건너뛴다', () => {

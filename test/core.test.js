@@ -441,6 +441,128 @@ test('부채가 없으면 debts 를 만들지 않는다', () => {
   assert.equal(facts.balance.totalDebt, 0);
 });
 
+test('거래가 없는 달을 0으로 채우되 "모름" 과 구분한다', () => {
+  // 예전엔 그 달이 목록에서 통째로 사라져 "3월에 얼마 썼어?" 에 답할 수 없었다.
+  // 더 나쁜 건 같은 데이터를 보는 spikes 는 0채움을 하고 있었다는 것 —
+  // 한 산출물 안에서 3월의 존재 여부가 두 갈래였다.
+  const f = build([
+    H.expense('2026-01-10', 500000),
+    H.expense('2026-04-10', 500000),
+  ]);
+  const months = f.flow.monthly.map((r) => r.month);
+  assert.deepEqual(months, ['2026-01', '2026-02', '2026-03', '2026-04']);
+
+  const feb = f.flow.monthly[1];
+  assert.strictEqual(feb.expense, 0);
+  assert.strictEqual(feb.noTransactions, true, '진짜 0 과 구분되어야 한다');
+  assert.strictEqual(f.flow.monthly[0].noTransactions, undefined);
+
+  // 카테고리 교차도 같은 달 목록을 써야 한다.
+  assert.deepEqual(f.categoryMonthly.months, months);
+});
+
+test('양끝은 늘리지 않는다 — 관측 전후는 "안 썼음" 이 아니라 "모름" 이다', () => {
+  const f = build([H.expense('2026-03-10', 100000), H.expense('2026-05-10', 100000)]);
+  assert.deepEqual(f.flow.monthly.map((r) => r.month),
+    ['2026-03', '2026-04', '2026-05']);
+});
+
+test('빈 달이 월평균 지출의 분모를 바꾸지 않는다', () => {
+  // 분모는 실제 경과일이다. 행 개수가 아니다 — 여기가 흔들리면
+  // 0채움이 비상금 기준선을 조용히 낮춘다.
+  const a = build([H.expense('2026-01-10', 300000), H.expense('2026-04-10', 300000)]);
+  assert.ok(Math.abs(a.flow.avgMonthlyExpense - Math.round(600000 / (91 / 30.436875))) < 2,
+    '실제로는 ' + a.flow.avgMonthlyExpense);
+});
+
+// ── 이름·기간 라벨 ─────────────────────────────────────────────────
+
+test('존칭이 붙은 본인 이름도 본인으로 본다 — "홍길동님"', () => {
+  // 못 잡으면 본인 이체가 남과의 이체로 잡히고, pace 에 없는 돈으로 더해진다.
+  const f = build([H.income('2025-01-01', 1000000), H.transfer('2025-01-10', -100000, '홍길동님')]);
+  assert.strictEqual(f.transfers.self.count, 1);
+  assert.strictEqual(f.transfers.external.count, 0);
+});
+
+test('존칭을 떼도 뒤에 더 붙은 건 남이다 — "홍길동님전자"', () => {
+  const f = build([H.income('2025-01-01', 1000000), H.transfer('2025-01-10', -100000, '홍길동님전자')]);
+  assert.strictEqual(f.transfers.self.count, 0, '접미사를 떼는 게 부분일치가 되면 안 된다');
+});
+
+test('흐름 창과 전체 창이 다르면 밝힌다', () => {
+  // period 는 이체까지 걸치고, pace·avgMonthlyExpense 는 이체를 뺀 창을 쓴다.
+  // 라벨이 없으면 소비자가 지출/period.days 로 12배 틀린 값을 만든다.
+  const f = build([
+    H.transfer('2025-01-01', -100000, '남'),
+    H.expense('2026-01-10', 500000),
+    H.income('2026-01-25', 3000000),
+  ]);
+  assert.strictEqual(f.period.days, 390);
+  assert.strictEqual(f.period.flowFrom, '2026-01-10');
+  assert.strictEqual(f.period.flowDays, 16);
+  assert.match(f.period.flowNote, /pace/);
+});
+
+test('두 창이 같으면 굳이 싣지 않는다', () => {
+  const f = build([H.expense('2026-01-10', 500000), H.income('2026-01-25', 3000000)]);
+  assert.strictEqual(f.period.flowFrom, undefined, '늘 실으면 소음이다');
+});
+
+test('generatedFor 는 데이터의 마지막 날이다 — 메일 받은 날이 아니다', () => {
+  const KMl = H.loadCore();
+  const f = KMl.aggregate.build(
+    KMl.parse.extract(H.sheets([H.expense('2026-06-10', 5000)])),
+    { asOf: '2026-06-30' });
+  assert.strictEqual(f.generatedFor, '2026-06-10', '뱅샐이 어제까지만 담아 보낼 수 있다');
+  assert.strictEqual(f.receivedOn, '2026-06-30', '메일 받은 날은 따로 남긴다');
+});
+
+// ── 델타 ───────────────────────────────────────────────────────────
+
+test('delta 는 잘린 목록으로 "새 구독" 을 판정하지 않는다', () => {
+  // 예전엔 상한(12) 밖에 있던 항목이 안으로 들어오면 없던 구독이 생긴 것으로
+  // 보고됐다. delta 는 내보낸 창 밖을 보존하는 유일한 수단이라 검증이 안 된다.
+  const KMl = H.loadCore();
+  const many = [];
+  for (let i = 0; i < 14; i++) {
+    for (let m = 1; m <= 12; m++) {
+      const mm = String(m).padStart(2, '0');
+      many.push(H.expense('2025-' + mm + '-10', 10000 + i * 1000, { desc: '구독' + i }));
+    }
+  }
+  const snap = KMl.aggregate.build(KMl.parse.extract(H.sheets(many)));
+  assert.ok(snap.recurring.activeKeys.length > snap.recurring.items.length,
+    '잘린 목록보다 키가 많아야 이 테스트가 의미 있다');
+
+  // 같은 데이터를 다시 넣으면 새 구독은 하나도 없어야 한다.
+  const d = KMl.aggregate.delta(snap, snap);
+  assert.deepEqual(d.newRecurring, [], '같은 데이터인데 새 구독이 나왔다');
+});
+
+test('delta — 진짜 새 항목은 잡는다', () => {
+  const KMl = H.loadCore();
+  const base = [];
+  for (let m = 1; m <= 12; m++) {
+    base.push(H.expense('2025-' + String(m).padStart(2, '0') + '-10', 9900, { desc: '넷플릭스' }));
+  }
+  const before = KMl.aggregate.build(KMl.parse.extract(H.sheets(base)));
+  const after = KMl.aggregate.build(KMl.parse.extract(H.sheets(base.concat(
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) =>
+      H.expense('2025-' + String(m).padStart(2, '0') + '-11', 14900, { desc: '유튜브' }))))));
+  const d = KMl.aggregate.delta(after, before);
+  assert.deepEqual(d.newRecurring.map((r) => r.label), ['유튜브']);
+});
+
+test('delta — 예전 스냅샷이 낡았으면 지어내지 않는다', () => {
+  const KMl = H.loadCore();
+  const cur = KMl.aggregate.build(KMl.parse.extract(H.sheets([H.expense('2026-01-10', 1000)])));
+  const old = JSON.parse(JSON.stringify(cur));
+  delete old.recurring.activeKeys;         // 0.4.x 이전 산출물
+  const d = KMl.aggregate.delta(cur, old);
+  assert.strictEqual(d.newRecurring, undefined);
+  assert.strictEqual(d.newRecurringOmitted, 'previousSnapshotTooOld');
+});
+
 // ── 빌드 산물 ──────────────────────────────────────────────────────
 
 test('커밋된 core.gs 가 지금 core/ 에서 나온 것이다', () => {
@@ -583,8 +705,12 @@ test('잘린 첫 달에도 daysObserved 를 준다', () => {
   // 마지막 달만 주고 첫 달은 partial 표시만 했다. 비대칭이라 소비자가
   // 첫 달을 온전한 달로 읽는다.
   const f = build([H.expense('2025-01-15', 500000), H.expense('2025-03-08', 100000)]);
-  assert.strictEqual(f.flow.monthly[0].daysObserved, 17, '1/15~1/31');
-  assert.strictEqual(f.flow.monthly[1].daysObserved, 8, '3/01~3/08');
+  const rows = f.flow.monthly;
+  assert.strictEqual(rows[0].daysObserved, 17, '1/15~1/31');
+  assert.strictEqual(rows[rows.length - 1].daysObserved, 8, '3/01~3/08');
+  // 사이의 2월은 거래가 없어 0으로 채워진 달이다. 잘린 게 아니다.
+  assert.strictEqual(rows[1].noTransactions, true);
+  assert.strictEqual(rows[1].partial, undefined);
 });
 
 test('순액 0인 이체 상대가 목록에서 사라지지 않는다', () => {

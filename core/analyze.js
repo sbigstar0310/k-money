@@ -73,8 +73,24 @@ KM.analyze = (function () {
       acc[m].income += M.inflow(t);
       acc[m].expense += M.outflow(t);
     }
-    return Object.keys(acc).sort().map(function (m) {
+
+    var seen = Object.keys(acc).sort();
+    if (!seen.length) return [];
+
+    // ⚠️ **중간의 빈 달을 만들어 넣는다.** 예전엔 거래가 하나도 없는 달이
+    //    목록에서 통째로 사라졌다. 그러면 "3월에 얼마 썼어?" 에 답할 수가
+    //    없고, 월 배열을 눈으로 훑는 소비자는 2월 다음이 4월인 걸 못 본다.
+    //    같은 데이터를 보는 spikes 는 이미 0채움을 하고 있어서, **한 산출물
+    //    안에서 3월의 존재 여부가 두 갈래**였다.
+    //
+    //    양끝은 늘리지 않는다. 관측이 시작되기 전과 끝난 뒤는 '안 썼다' 가
+    //    아니라 '모른다' 다.
+    return monthRange(seen[0], seen[seen.length - 1]).map(function (m) {
       var r = acc[m];
+      if (!r) {
+        // 진짜 0 과 구분한다. 소비자가 "이 달은 왜 0이지" 를 물을 수 있어야 한다.
+        return { month: m, income: 0, expense: 0, net: 0, noTransactions: true };
+      }
       r.net = r.income - r.expense;
       return r;
     });

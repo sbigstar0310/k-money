@@ -53,6 +53,10 @@ test('컨테이너에 파이프라인 로직이 없다', () => {
     [/KM\.aggregate|KM\.parse/, '집계 호출'],
     [/unzipEncrypted/, '압축 해제'],
     [/createFile|setContent/, 'Drive 쓰기'],
+    // 잠금은 라이브러리가 잡는다. 여기서 process 를 직접 부르면 잠금을
+    // 빼먹기 쉽고, 빼먹은 걸 나중에 고칠 수가 없다.
+    [/\.process\(/, '파이프라인 직접 호출'],
+    [/writeStatus/, '상태 쓰기'],
   ];
   FORBIDDEN.forEach(([re, what]) => {
     assert.doesNotMatch(CODE, re, what + ' 이 컨테이너에 있다 — 고칠 수 없는 곳이다');

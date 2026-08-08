@@ -116,8 +116,18 @@ KM.model = (function () {
     // 실측에서 이 한 건이 본인 이체 494,000원을 타인으로 새게 만들었다.
     // → 한글·영숫자·* 의 연속만 토큰으로 뽑아 구두점을 떨군다.
     var tokens = String(desc).match(/[가-힣A-Za-z0-9*]+/g) || [];
-    for (var i = 0; i < tokens.length; i++) {
-      var tok = tokens[i];
+    // 뱅샐이 적요에 존칭을 붙이는 경우가 있다. '홍길동님' 은 길이가 하나 길어
+    // 본인 판정에서 빠지고, 그러면 본인 이체가 남과의 이체로 잡혀
+    // pace 에 없는 돈으로 더해진다. 접미사만 떼고 원본도 함께 본다.
+    // '홍길동님전자' 처럼 뒤에 더 붙은 건 떼도 길이가 안 맞아 여전히 걸러진다.
+    var candidates = [];
+    for (var t = 0; t < tokens.length; t++) {
+      candidates.push(tokens[t]);
+      var stripped = tokens[t].replace(/(님|씨)$/, '');
+      if (stripped !== tokens[t] && stripped) candidates.push(stripped);
+    }
+    for (var i = 0; i < candidates.length; i++) {
+      var tok = candidates[i];
       if (tok.length !== owner.length) continue;
       var exact = 0;
       var ok = true;
@@ -340,8 +350,24 @@ KM.analyze = (function () {
       acc[m].income += M.inflow(t);
       acc[m].expense += M.outflow(t);
     }
-    return Object.keys(acc).sort().map(function (m) {
+
+    var seen = Object.keys(acc).sort();
+    if (!seen.length) return [];
+
+    // ⚠️ **중간의 빈 달을 만들어 넣는다.** 예전엔 거래가 하나도 없는 달이
+    //    목록에서 통째로 사라졌다. 그러면 "3월에 얼마 썼어?" 에 답할 수가
+    //    없고, 월 배열을 눈으로 훑는 소비자는 2월 다음이 4월인 걸 못 본다.
+    //    같은 데이터를 보는 spikes 는 이미 0채움을 하고 있어서, **한 산출물
+    //    안에서 3월의 존재 여부가 두 갈래**였다.
+    //
+    //    양끝은 늘리지 않는다. 관측이 시작되기 전과 끝난 뒤는 '안 썼다' 가
+    //    아니라 '모른다' 다.
+    return monthRange(seen[0], seen[seen.length - 1]).map(function (m) {
       var r = acc[m];
+      if (!r) {
+        // 진짜 0 과 구분한다. 소비자가 "이 달은 왜 0이지" 를 물을 수 있어야 한다.
+        return { month: m, income: 0, expense: 0, net: 0, noTransactions: true };
+      }
       r.net = r.income - r.expense;
       return r;
     });
@@ -1070,7 +1096,13 @@ KM.aggregate = (function () {
       title: title(txns),
       schema: SCHEMA,
       source: extract.source,
-      generatedFor: opts.asOf || (monthly.length ? monthly[monthly.length - 1].month : null),
+      // ⚠️ **데이터의 마지막 날이다.** 예전에는 메일을 받은 날(asOf)을 썼다.
+      //    뱅샐이 어제까지만 담아 보내면 그 둘이 다르고, delta.since 가
+      //    그걸 물려받아 "언제부터의 변화인지" 가 하루씩 어긋났다.
+      //    메일 받은 날은 별도 필드로 남긴다.
+      generatedFor: (period(txns) || {}).to
+                    || opts.asOf
+                    || (monthly.length ? monthly[monthly.length - 1].month : null),
       period: period(txns),
 
       flow: {
@@ -1165,6 +1197,10 @@ KM.aggregate = (function () {
       if (out.cash) delete out.cash.monthsOfExpense;
     }
 
+    if (opts.asOf && opts.asOf !== out.generatedFor) {
+      out.receivedOn = opts.asOf;   // 메일을 받은 날. 데이터의 마지막 날과 다르다
+    }
+
     out.hints = HINTS;
     return out;
   }
@@ -1174,11 +1210,33 @@ KM.aggregate = (function () {
     return p ? '돈동생 가계 요약 · ' + p.from + ' ~ ' + p.to : '돈동생 가계 요약';
   }
 
+  /**
+   * ⚠️ **창이 두 개다.** period 는 이체를 포함한 **모든** 거래를 걸치고,
+   *    pace·avgMonthlyExpense 는 **이체를 뺀** 거래만 걸친다. 둘이 크게
+   *    다를 수 있는데 (이체 한 건이 1년 앞에 있으면 390일 vs 1개월),
+   *    라벨이 없어서 소비자가 어느 쪽인지 알 수 없었다.
+   *    hints 는 "여기 있는 숫자로 비율을 계산해 써라" 고 권하고 있고.
+   */
   function period(txns) {
     if (!txns.length) return null;
     var days = txns.map(function (t) { return t.day; }).sort();
     var from = days[0], to = days[days.length - 1];
-    return { from: from, to: to, days: A.dayDiff(from, to) };
+    var out = { from: from, to: to, days: A.dayDiff(from, to) };
+
+    var flowDays = txns.filter(function (t) { return t.kind !== M.Kind.TRANSFER; })
+                       .map(function (t) { return t.day; }).sort();
+    if (flowDays.length) {
+      var f = flowDays[0], t2 = flowDays[flowDays.length - 1];
+      // 같으면 굳이 싣지 않는다 — 대부분의 경우 같고, 늘 실으면 소음이다.
+      if (f !== from || t2 !== to) {
+        out.flowFrom = f;
+        out.flowTo = t2;
+        out.flowDays = A.dayDiff(f, t2);
+        out.flowNote = '수입·지출 지표(pace·avgMonthlyExpense·monthly)는 이 창을 쓴다. ' +
+          'period 의 from·to 는 이체까지 포함한 전체 범위다';
+      }
+    }
+    return out;
   }
 
   /**
@@ -1312,9 +1370,13 @@ KM.aggregate = (function () {
       // ⚠️ label 이 실려야 한다. 금액이 일정하면 월세도 식비도 여기 잡히는데,
       //    총액만 주면 "고정지출 전액 끊으면 15년 빨라져" 같은 답이 나온다
       //    (실측 재현: 진짜 구독만이면 11개월. 179개월 차이).
+      // ⚠️ **잘리지 않은 활성 키 전체.** delta 가 '새로 생겼나' 를 판정할 때
+      //    쓴다. items 는 상한이 걸려 있어서, 그걸로 비교하면 경계를 넘어
+      //    들어온 항목이 없던 구독으로 보고된다.
+      activeKeys: active.map(function (r) { return r.key; }),
       items: shown.map(function (r) {
         return {
-          label: r.label, months: r.months,
+          key: r.key, label: r.label, months: r.months,
           firstMonth: r.firstMonth, lastMonth: r.lastMonth,
           monthlyMedian: r.monthlyMedian, observedTotal: r.observedTotal,
           active: r.active,
@@ -1517,12 +1579,32 @@ KM.aggregate = (function () {
     if (current.flow && previous.flow) {
       d.avgMonthlyExpense = current.flow.avgMonthlyExpense - previous.flow.avgMonthlyExpense;
     }
+    // ⚠️ **잘린 목록으로 '새로 생겼나' 를 판정하면 안 된다.** 예전에는
+    //    previous.recurring.items(상한 12개로 이미 잘린 것)를 '예전에 있던 것'
+    //    으로 썼다. 그래서 경계를 넘어 들어온 항목이 **없던 구독이 생긴 것**
+    //    으로 보고됐다. delta 는 내보낸 창 밖을 보존하는 유일한 수단이라,
+    //    여기서 나온 거짓은 유저가 검증할 방법이 없다.
+    //
+    //    그래서 잘리지 않은 **활성 키 전체**(activeKeys)를 따로 싣고 그걸로
+    //    비교한다. label 이 아니라 키로 보는 이유는, 설명이 같은 서로 다른
+    //    항목이 label 만으로는 한 덩어리가 되기 때문이다.
     if (current.recurring && previous.recurring) {
-      var was = {};
-      previous.recurring.items.forEach(function (r) { was[r.label] = true; });
-      d.newRecurring = current.recurring.items
-        .filter(function (r) { return r.active && !was[r.label]; })
-        .map(function (r) { return { label: r.label, monthlyMedian: r.monthlyMedian }; });
+      var prevKeys = previous.recurring.activeKeys;
+      if (prevKeys) {
+        var was = {};
+        prevKeys.forEach(function (k) { was[k] = true; });
+        d.newRecurring = (current.recurring.activeKeys || [])
+          .filter(function (k) { return !was[k]; })
+          .map(function (k) {
+            var hit = null;
+            current.recurring.items.forEach(function (r) { if (r.key === k) hit = r; });
+            return hit ? { label: hit.label, monthlyMedian: hit.monthlyMedian }
+                       : { key: k };
+          });
+      } else {
+        // 예전 스냅샷이 activeKeys 를 안 갖고 있다 (0.4.x 이전). 지어내지 않는다.
+        d.newRecurringOmitted = 'previousSnapshotTooOld';
+      }
     }
     return d;
   }

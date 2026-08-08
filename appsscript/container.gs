@@ -170,8 +170,7 @@ function onOpen() {
 
 /** 시간 트리거가 부르는 함수. */
 function runDaily() {
-  var r = app_().runDaily(env_());
-  Logger.log(r && r.message);
+  Logger.log(app_().runDaily(env_()).message);
 }
 
 /** 매일 자동 실행을 건다. ScriptApp 은 컨테이너에 둔다 — 트리거는 이 프로젝트의 것이다. */
@@ -239,10 +238,13 @@ function setup_check() {
   found.app.checkSetup(env_()).forEach(function (line) { Logger.log(line); });
 }
 
-/** 마지막 메일을 이미 처리했더라도 다시 처리한다. 편집기에서만 쓴다. */
+/**
+ * 마지막 메일을 이미 처리했더라도 다시 처리한다. 편집기에서만 쓴다.
+ *
+ * ⚠️ 잠금은 **라이브러리가** 잡는다. 예전엔 여기서 process 를 직접 불러
+ *    잠금 없이 돌았고, 그게 하필 이 파일이라 이미 사본을 뜬 사람에게는
+ *    영영 못 고치는 상태였다. 컨테이너 원칙 그대로 — 판단을 여기 두지 않는다.
+ */
 function runOnceForce() {
-  var env = env_();
-  var r = app_().process(env, { force: true });
-  app_().writeStatus(env, r);
-  Logger.log(r.message);
+  Logger.log(app_().runForced(env_()).message);
 }

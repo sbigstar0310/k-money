@@ -96,8 +96,18 @@ KM.model = (function () {
     // 실측에서 이 한 건이 본인 이체 494,000원을 타인으로 새게 만들었다.
     // → 한글·영숫자·* 의 연속만 토큰으로 뽑아 구두점을 떨군다.
     var tokens = String(desc).match(/[가-힣A-Za-z0-9*]+/g) || [];
-    for (var i = 0; i < tokens.length; i++) {
-      var tok = tokens[i];
+    // 뱅샐이 적요에 존칭을 붙이는 경우가 있다. '홍길동님' 은 길이가 하나 길어
+    // 본인 판정에서 빠지고, 그러면 본인 이체가 남과의 이체로 잡혀
+    // pace 에 없는 돈으로 더해진다. 접미사만 떼고 원본도 함께 본다.
+    // '홍길동님전자' 처럼 뒤에 더 붙은 건 떼도 길이가 안 맞아 여전히 걸러진다.
+    var candidates = [];
+    for (var t = 0; t < tokens.length; t++) {
+      candidates.push(tokens[t]);
+      var stripped = tokens[t].replace(/(님|씨)$/, '');
+      if (stripped !== tokens[t] && stripped) candidates.push(stripped);
+    }
+    for (var i = 0; i < candidates.length; i++) {
+      var tok = candidates[i];
       if (tok.length !== owner.length) continue;
       var exact = 0;
       var ok = true;

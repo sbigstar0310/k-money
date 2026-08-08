@@ -72,19 +72,13 @@ var KMApp = (function () {
 
   function process(env, opts) {
     opts = opts || {};
-    var props = env.props;
-
-    var password = props.getProperty(PROP.password);
+    var password = env.props.getProperty(PROP.password);
     if (!password) {
       return { ok: false, step: 'setup', message: '비밀번호가 아직 없어요. 메뉴에서 ① 처음 설정하기 를 눌러 주세요.' };
     }
 
     var found = findAttachment(env, opts.force);
     if (!found) {
-      // ⚠️ 아래 문구들은 **유저가 시트 첫 화면에서 매일 본다.**
-      //    제품 전체가 존댓말인데 여기만 반말이었고, 성공했을 때조차
-      //    다음에 뭘 하라는 말이 없었다. bytes 는 개발자용이라 뺐다
-      //    (상태 파일에는 남는다).
       return { ok: true, step: 'idle',
         message: '새로 온 뱅크샐러드 메일이 없어요. 앱에서 「파일로 받기」를 눌러 주세요.' };
     }
@@ -99,31 +93,43 @@ var KMApp = (function () {
     // 1) 원본 보존 — 집계를 고쳤을 때 과거를 다시 계산할 수 있어야 한다
     var zipFile = putFile(raw, stamp + '.zip', found.attachment.copyBlob());
 
-    // 2) 해제
+    var xlsx = openXlsx(zipFile, password);
+    if (xlsx.error) return xlsx.error;
+
+    var facts = buildFacts(env, folder, raw, xlsx.blob, stamp, found);
+    if (facts.error) return facts.error;
+
+    return persist(env, folder, facts.value, stamp, found);
+  }
+
+  /** 2) 해제 — zip 안에서 xlsx 를 꺼낸다. */
+  function openXlsx(zipFile, password) {
     var files;
     try {
       files = unzipEncrypted(zipFile.getBlob(), password);
     } catch (e) {
-      return {
+      return { error: {
         ok: false, step: 'decrypt',
         message: '압축을 풀지 못했어요. 뱅크샐러드에서 정한 비밀번호와 ' +
                  '여기 넣은 값이 다를 수 있어요. 메뉴의 "비밀번호 다시 넣기" 로 ' +
                  '맞춰 주세요. (' + e.message + ')',
-      };
+      } };
     }
-
-    var xlsx = null;
     for (var i = 0; i < files.length; i++) {
-      if (files[i].getName().toLowerCase().indexOf('.xlsx') !== -1) { xlsx = files[i]; break; }
+      if (files[i].getName().toLowerCase().indexOf('.xlsx') !== -1) return { blob: files[i] };
     }
-    if (!xlsx) {
-      return { ok: false, step: 'unzip',
-        message: '압축 안에 엑셀 파일이 없어요. 뱅크샐러드에서 다시 내보내 주세요.' };
-    }
+    return { error: { ok: false, step: 'unzip',
+      message: '압축 안에 엑셀 파일이 없어요. 뱅크샐러드에서 다시 내보내 주세요.' } };
+  }
 
-    // 3) xlsx → Google Sheets. openpyxl 이식이 통째로 사라지는 지점이다.
+  /**
+   * 3~4) xlsx → Google Sheets → 집계.
+   *
+   * 임시 시트는 중간 산물이라 반드시 치운다. 그래서 finally 가 필요한데,
+   * 그 범위를 집계까지 끌고 가지 않으려고 함수를 나눴다.
+   */
+  function buildFacts(env, folder, raw, xlsx, stamp, found) {
     var tmpId = null;
-    var facts;
     try {
       tmpId = env.driveApi.Files.create(
         { name: 'k-money-tmp-' + stamp, mimeType: CFG.sheetsMime, parents: [raw.getId()] },
@@ -136,71 +142,81 @@ var KMApp = (function () {
         sheets[s.getName()] = s.getDataRange().getValues();
       });
 
-      // 4) 집계 — node 에서 검증한 그 코드
-      // 내정보.json 은 유저가 직접 올린다. 없어도 정상 동작한다.
-      var extract = KM.parse.extract(sheets);
-      facts = KM.aggregate.build(extract, {
-        asOf: stamp,
-        // 개인화는 메모리 폴더의 마크다운으로 간다. facts 에 싣지 않는다 —
-        // 우리가 그 값으로 계산하지 않으므로 실어 나를 이유가 없고,
-        // 실으면 스키마가 유저의 자유로운 문장을 좁힌다.
-        profile: null,
-      });
+      // node 에서 검증한 그 코드.
+      // 개인화는 메모리 폴더의 마크다운으로 간다 — facts 에 싣지 않는다.
+      var facts = KM.aggregate.build(KM.parse.extract(sheets), { asOf: stamp, profile: null });
       facts.generatedAt = new Date().toISOString();
       facts.sourceMessageId = found.id;
 
-      // 같은 날 두 번 내보내면 latest 와 날짜가 같아 델타가 전부 0이 된다.
+      // 같은 날 두 번 내보내면 최신본과 날짜가 같아 델타가 전부 0이 된다.
       // 그런 날은 그 이전 스냅샷을 찾아서 비교한다.
-      var d = KM.aggregate.delta(facts, readPrevious(folder, stamp));
+      var d = KM.aggregate.delta(facts, readPrevious(folder, facts.generatedFor));
       if (d) facts.delta = d;
+      return { value: facts };
     } finally {
-      // 변환본은 중간 산물이라 남기지 않는다. 원본 zip 이 있으면 언제든 다시 만든다.
       if (tmpId) { try { env.drive.getFileById(tmpId).setTrashed(true); } catch (ignored) {} }
     }
+  }
 
-    // 5) 저장 — latest 는 고정 이름이라 커넥터가 찾기 쉽다
+  /** 5) 저장 — 최신본은 고정 이름이라 AI 가 찾기 쉽다. */
+  function persist(env, folder, facts, stamp, found) {
     var json = JSON.stringify(facts, null, 2);
-    putJson(folder, historyName(stamp), json);
+    // ⚠️ 히스토리 파일 이름은 **데이터의 마지막 날**로 짓는다. 메일 받은 날로
+    //    지으면 readPrevious 의 비교 기준과 어긋나 자기 자신과 비교하게 된다.
+    var day = facts.generatedFor || stamp;
+    putJson(folder, historyName(day), json);
     putJson(folder, CFG.latestName, json);
     pruneFacts(folder);
 
-    markProcessed(props, found.id);
-    // ⚠️ 메일 **수신일**(stamp)이 아니라 거래의 **마지막 날**을 적는다.
-    //    유저에게 "데이터는 X 까지 있어요" 라고 말할 참이라, 저장하는 값이
-    //    그 문장과 같은 것이어야 한다. 뱅샐이 어제까지만 담아 보냈는데
-    //    오늘 날짜를 적으면 그 한 줄이 거짓말이 된다.
-    props.setProperty(PROP.lastIngest, (facts.period && facts.period.to) || stamp);
+    markProcessed(env.props, found.id);
+    // ⚠️ 메일 **수신일**이 아니라 거래의 **마지막 날**을 적는다.
+    //    유저에게 "데이터는 X 까지 있어요" 라고 말할 값이라, 저장하는 것이
+    //    그 문장과 같아야 한다.
+    env.props.setProperty(PROP.lastIngest, day);
 
     return {
       ok: true, step: 'done',
-      message: stamp + ' 까지 정리했어요' +
+      message: day + ' 까지 정리했어요' +
                (facts.period ? ' (' + facts.period.days + '일치)' : ' (거래 0건)') +
                '. 이제 AI에게 물어보세요.',
-      generatedFor: stamp,
+      generatedFor: day,
       bytes: json.length,
       flags: (facts.dataQuality && facts.dataQuality.flags || []).map(function (f) { return f.code; }),
     };
   }
 
-  /** 트리거가 부르는 것. 예외를 삼키지 않되 상태는 반드시 남긴다. */
-  function runDaily(env) {
-    // 트리거가 겹치거나 유저가 수동 실행을 같이 눌러도 두 번 돌지 않게 한다.
+  /**
+   * 잠금을 잡고 한 번 돌린다. **모든 실행 경로가 여기를 지난다.**
+   *
+   * ⚠️ 예전엔 runOnceForce 만 잠금 없이 돌았고, 그게 하필 컨테이너에 있어서
+   *    이미 사본을 뜬 사람에게는 영영 못 고치는 상태였다. 겹치면 임시 시트가
+   *    둘, 최신본 쓰기가 둘이 되고 pruneFacts 가 서로 쓰는 걸 지운다.
+   */
+  function runGuarded(env, opts) {
     if (!env.lock.tryLock(10 * 1000)) {
       return { ok: true, step: 'busy', message: '이미 실행 중이라 건너뜁니다.' };
     }
     try {
-      var result = process(env);
+      var result = process(env, opts);
       writeStatus(env, result);
       return result;
     } catch (e) {
-      // 무인 실행이라 예외를 삼키면 아무도 모른다. Drive 에 남겨서
-      // 다음에 대화할 때 LLM 이 읽을 수 있게 한다.
       var fail = { ok: false, step: 'unknown', message: String(e && e.message || e) };
       try { writeStatus(env, fail); } catch (ignored) {}
       throw e;
     } finally {
       env.lock.releaseLock();
     }
+  }
+
+  /** 트리거가 부르는 것. 예외를 삼키지 않되 상태는 반드시 남긴다. */
+  function runDaily(env) {
+    return runGuarded(env, {});
+  }
+
+  /** 편집기에서 손으로 돌릴 때. 이미 처리한 메일도 다시 본다. */
+  function runForced(env) {
+    return runGuarded(env, { force: true });
   }
 
   // ── Gmail ────────────────────────────────────────────────────────
@@ -726,23 +742,18 @@ var KMApp = (function () {
 
   function menuRunNow(env) {
     var ui = env.ui;
-    // 아침 7시 트리거와 겹칠 수 있다. 겹치면 임시 시트가 둘, 최신본 쓰기가
-    // 둘이 되고 pruneFacts 가 서로가 쓰는 걸 지운다.
-    if (!env.lock.tryLock(10 * 1000)) {
+    var r;
+    try {
+      r = runForced(env);
+    } catch (e) {
+      ui.alert('실패', String((e && e.message) || e) + '\n\n' + versionText(env), ui.ButtonSet.OK);
+      return;
+    }
+    if (r.step === 'busy') {
       ui.alert('잠시만요', '지금 자동 실행이 돌고 있어요. 1분 뒤에 다시 눌러 주세요.', ui.ButtonSet.OK);
       return;
     }
-    try {
-      var r = process(env, { force: true });
-      writeStatus(env, r);
-      ui.alert(r.ok ? '완료' : '실패', r.message, ui.ButtonSet.OK);
-    } catch (e) {
-      var msg = String((e && e.message) || e);
-      try { writeStatus(env, { ok: false, step: 'error', message: msg }); } catch (ignored) {}
-      ui.alert('실패', msg + '\n\n' + versionText(env), ui.ButtonSet.OK);
-    } finally {
-      env.lock.releaseLock();
-    }
+    ui.alert(r.ok ? '완료' : '실패', r.message, ui.ButtonSet.OK);
   }
 
   function menuStatus(env) {
@@ -818,7 +829,7 @@ var KMApp = (function () {
   return {
     CFG: CFG, PROP: PROP, checkSetup: checkSetup,
     STATUS_CELL: STATUS_CELL, CHECKED_CELL: CHECKED_CELL, STATUS_SHEET: STATUS_SHEET,
-    process: process, runDaily: runDaily,
+    process: process, runDaily: runDaily, runForced: runForced, runGuarded: runGuarded,
     findAttachment: findAttachment, getProcessed: getProcessed, markProcessed: markProcessed,
     ensureFolder: ensureFolder, findFile: findFile, putFile: putFile, putJson: putJson,
     readJson: readJson, readPrevious: readPrevious, pruneFacts: pruneFacts,
