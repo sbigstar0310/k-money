@@ -48,10 +48,21 @@ test('실데이터가 끝까지 돈다', opts, () => {
   assert.strictEqual(accs - f.balance.totalDebt, f.balance.netWorth, '계좌 합 + 나머지 − 부채 = 순자산');
 });
 
-test('실데이터 산출물이 커넥터 한도 안에 든다', opts, () => {
+test('실데이터 산출물이 커지지 않는다', opts, () => {
+  // ⚠️ **드라이브에 실제로 쓰이는 모양 그대로 잰다.** 예전엔 압축본을 쟀는데
+  //    app.gs 의 persist 는 `JSON.stringify(facts, null, 2)` 를 쓴다. 배율이
+  //    1.73배라 압축 10,072 bytes 가 실제로는 17,391 bytes 로 나간다 —
+  //    **재는 숫자와 나가는 숫자가 달랐다.** 필드를 하나 늘려 압축이 한도
+  //    안에 남아 있어도 실제 파일은 훌쩍 넘을 수 있었다.
+  //
+  //    '19KB 를 넘으면 커넥터가 빈 문자열로 읽는다' 는 옛 기록은 **틀렸다**
+  //    (DECISIONS §4 — 갓 만든 파일이 잠시 비어 보인 것이었다). 그러니
+  //    이 문턱은 절벽이 아니라 **증가 감지기**다. 목록 절단이 풀리거나
+  //    0채움에 상한이 없어지면 여기가 먼저 빨개진다 (실제로 그렇게 잡혔다).
   const sheets = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
-  const size = JSON.stringify(KM.aggregate.build(KM.parse.extract(sheets))).length;
-  assert.ok(size < 12000, '산출물 ' + size + ' bytes — 19KB 절벽에 접근');
+  const facts = KM.aggregate.build(KM.parse.extract(sheets));
+  const size = JSON.stringify(facts, null, 2).length;
+  assert.ok(size < 20000, '산출물 ' + size + ' bytes — 무엇이 늘었는지 보라');
 });
 
 test('실데이터에서 이체 분해가 총량을 보존한다', opts, () => {

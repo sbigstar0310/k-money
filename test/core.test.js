@@ -402,14 +402,17 @@ test('enum 값은 ASCII 다 — JSON 소비자가 한국어로 분기하면 안 
     '실제: ' + Object.keys(f.balance.buckets).join(','));
 });
 
-test('산출물에 원본 거래가 실리지 않는다 — 커넥터 19KB 절벽', () => {
+test('산출물 크기가 거래 건수를 따라가지 않는다', () => {
+  // 산출물은 **집계**라 3,000건이든 30건이든 비슷해야 한다. 여기가 커지면
+  // 어딘가에서 원본 거래가 그대로 실려 나가고 있다는 뜻이다.
+  // (예전 이름은 '커넥터 19KB 절벽' 이었는데 그 절벽은 없었다 — DECISIONS §4.)
   const txns = [];
   for (let i = 0; i < 3000; i++) {
     txns.push(H.expense('2025-' + String((i % 12) + 1).padStart(2, '0') + '-10', 1000 + i,
       { desc: '가맹점' + i }));
   }
-  const size = JSON.stringify(build(txns)).length;
-  assert.ok(size < 12000, '거래 3,000건인데 산출물이 ' + size + ' bytes');
+  const size = JSON.stringify(build(txns), null, 2).length;
+  assert.ok(size < 20000, '거래 3,000건인데 산출물이 ' + size + ' bytes');
 });
 
 
