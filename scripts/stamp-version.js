@@ -22,16 +22,16 @@ if (!/^\d+\.\d+\.\d+$/.test(version)) {
 
 fs.writeFileSync(path.join(ROOT, 'VERSION'), version + '\n');
 
-// main.gs 는 라이브러리로 배포되지 않는다 — 유저 시트 안의 사본이다.
+// container.gs 는 라이브러리로 배포되지 않는다 — 유저 시트 안의 사본이다.
 // 그래서 자기 버전을 스스로 들고 있어야 한다.
-const mainPath = path.join(ROOT, 'appsscript', 'main.gs');
+const mainPath = path.join(ROOT, 'appsscript', 'container.gs');
 const before = fs.readFileSync(mainPath, 'utf8');
 const after = before.replace(
-  /var MAIN_VERSION = '[^']*'/,
-  "var MAIN_VERSION = '" + version + "'");
+  /var CONTAINER_VERSION = '[^']*'/,
+  "var CONTAINER_VERSION = '" + version + "'");
 
-if (after === before && !before.includes("var MAIN_VERSION = '" + version + "'")) {
-  console.error('main.gs 에서 MAIN_VERSION 을 못 찾았다. 이름이 바뀌었나?');
+if (after === before && !before.includes("var CONTAINER_VERSION = '" + version + "'")) {
+  console.error('container.gs 에서 CONTAINER_VERSION 을 못 찾았다. 이름이 바뀌었나?');
   process.exit(1);
 }
 fs.writeFileSync(mainPath, after);
@@ -47,4 +47,4 @@ if (stamped === readme && !readme.includes('현재 버전 **' + version + '**'))
 }
 fs.writeFileSync(readmePath, stamped);
 
-console.log('v' + version + ' → VERSION, appsscript/main.gs, README.md');
+console.log('v' + version + ' → VERSION, appsscript/container.gs, README.md');

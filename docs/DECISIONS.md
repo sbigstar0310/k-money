@@ -243,7 +243,7 @@
 | `docs/setup-gmail.md` | ⚠️ **개발자 전용**. 유저 절차 아님 |
 | `docs/architecture.md`, `docs/project-brief.md` | ❌ **무효.** 이력 참조용 |
 | `core/*.js` | ✅ 코어. 함정 주석이 문서보다 정확하다 |
-| `appsscript/main.gs` | ✅ 하루 한 번 도는 본체 |
+| `appsscript/container.gs` | ✅ 하루 한 번 도는 본체 |
 | `appsscript/core.gs` | 🔧 자동 생성 (`npm run build`). 직접 고치지 말 것 |
 | `appsscript/verify.gs`, `probe.gs` | 🔧 검증 도구. 유저 배포물 아님 |
 | `src/k_money/` (Python) | 🔧 개발 도구만 남음 (Gmail 탐색, 픽스처 생성) |

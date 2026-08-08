@@ -332,9 +332,9 @@ has:attachment filename:zip (뱅크샐러드 OR banksalad)
 - 버전을 고정해 쓰기 때문에, 만든 사람이 코드를 바꿔도 내 것은 안 바뀝니다.
 
 되살리려면 [GitHub](https://github.com/sbigstar0310/k-money)의 `appsscript/` 에서
-**`core.gs` · `zipcrypto.gs` · `library-api.gs` 세 개**를 내 스크립트에 새 파일로
-붙여넣으세요. 그러면 라이브러리 없이도 계속 돌아요. 세 개를 다 넣어야 해요 —
-`zipcrypto.gs` 가 빠지면 압축을 푸는 데서 멈춥니다.
+**`core.gs` · `zipcrypto.gs` · `app.gs` · `library-api.gs` 네 개**를 내 스크립트에
+새 파일로 붙여넣으세요. 그러면 라이브러리 없이도 계속 돌아요.
+네 개를 다 넣어야 합니다 — 하나라도 빠지면 중간에 멈춰요.
 
 **그만두려면**
 

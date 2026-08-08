@@ -8,7 +8,7 @@
     "build": "node scripts/build-gs.js",
     "check": "node scripts/build-gs.js && node --test test/",
     "run:local": "node scripts/run-local.js",
-    "version": "node scripts/stamp-version.js && node scripts/build-gs.js && git add VERSION README.md appsscript/core.gs appsscript/main.gs"
+    "version": "node scripts/stamp-version.js && node scripts/build-gs.js && git add VERSION README.md appsscript/core.gs appsscript/container.gs"
   },
   "engines": {
     "node": ">=20"
