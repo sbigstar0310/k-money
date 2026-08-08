@@ -14,7 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const ROOT = path.join(__dirname, '..');
+const ROOT = path.join(__dirname, '..', '..');
 
 /** core 를 한 번만 로드해서 KM 을 돌려준다. */
 function loadCore() {

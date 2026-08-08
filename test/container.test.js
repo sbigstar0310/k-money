@@ -15,7 +15,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const vm = require('node:vm');
-const scan = require('./scan');
+const scan = require('./lib/scan');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = fs.readFileSync(path.join(ROOT, 'appsscript', 'container.gs'), 'utf8');
@@ -302,7 +302,7 @@ test('샘플 산출물이 실제 스키마와 같고 커넥터 한도 안에 든
   // 스키마가 바뀌었는데 여기가 옛날 모양이면 그 안내가 거짓이 된다.
   const sample = JSON.parse(
     fs.readFileSync(path.join(ROOT, 'docs', 'sample-latest.json'), 'utf8'));
-  const KM = require('./helpers').loadCore();
+  const KM = require('./lib/helpers').loadCore();
   assert.equal(sample.schema, KM.aggregate.SCHEMA, '샘플이 옛 스키마다 — 다시 만들어라');
   assert.ok(JSON.stringify(sample).length < 40000, '커넥터가 못 읽을 만큼 크다');
   // 실데이터를 실수로 커밋하는 걸 막는다.

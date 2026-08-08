@@ -18,7 +18,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const H = require('./helpers');
+const H = require('./lib/helpers');
 
 const KM = H.loadCore();
 const build = (txns, status) => KM.aggregate.build(KM.parse.extract(H.sheets(txns, status)));

@@ -13,7 +13,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const vm = require('node:vm');
-const H = require('./helpers');
+const H = require('./lib/helpers');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = fs.readFileSync(path.join(ROOT, 'appsscript', 'app.gs'), 'utf8');
@@ -489,7 +489,7 @@ test('menuRunNow — 라이브러리가 폭발해도 날 것의 오류를 보여
 
 test('유저에게 보이는 문자열에 마크다운을 쓰지 않는다', () => {
   // ui.alert 는 평문만 렌더한다. **강조** 는 별표가 그대로 보인다.
-  const { strings } = require('./scan')(SRC);
+  const { strings } = require('./lib/scan')(SRC);
   const bad = strings.filter((l) => l.indexOf('**') !== -1);
   assert.deepEqual(bad, [], '별표가 그대로 보인다: ' + bad.join(' | '));
 });
