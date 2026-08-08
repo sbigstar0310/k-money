@@ -32,6 +32,7 @@ var CFG = {
   keepFacts: 12,        // facts-*.json 보관 개수. 델타 계산에 히스토리가 필요하다
   searchThreads: 10,
   processedKeep: 50,    // 중복 처리 방지용 메시지 ID 보관 개수
+  staleDays: 14,        // 이만큼 새 데이터가 없으면 시트 첫 화면에서 경고한다
 };
 
 /**
@@ -41,10 +42,15 @@ var CFG = {
  * 붙여넣었으면 전역에 있다. 덕분에 개발용 코드와 배포용 코드가 갈라지지
  * 않는다 — 갈라지면 반드시 어긋나고, 어긋난 걸 늦게 안다.
  *
- * ⚠️ **식별자 이름에 기대지 않는다.** 라이브러리를 추가할 때 식별자는
+ * ⚠️ **식별자 이름 하나에 걸지 않는다.** 라이브러리를 추가할 때 식별자는
  *    프로젝트 이름에서 자동으로 채워지고(예: `kmoneylib`) 유저가 바꿀 수도
  *    있다. 이름을 하나로 못 박으면 그 한 글자 때문에 파이프라인이 통째로
- *    멈춘다. 그래서 **API 모양으로 찾는다** — `buildFacts` 를 가진 것이 코어다.
+ *    멈춘다.
+ *
+ *    실질적인 보장은 **매니페스트가 `userSymbol` 을 고정**하고 그게 사본에
+ *    따라온다는 것이다. 아래 전역 훑기는 그 위에 덧댄 보험이고, Apps Script
+ *    전역이 라이브러리 심볼을 열거 가능한 속성으로 노출하는지는 **실환경에서
+ *    확인하지 않았다.** 안 되더라도 잃는 건 없지만, 믿고 설계하지는 마라.
  */
 // Apps Script 가 프로젝트 이름에서 자동으로 만드는 식별자가 먼저다.
 // 'k-money-lib' → 'kmoneylib'. 유저가 바꿀 수도 있으므로 못 찾으면 모양으로 찾는다.
@@ -84,6 +90,9 @@ var PROP = {
   password: 'BANKSALAD_ZIP_PASSWORD',
   processed: 'PROCESSED_MESSAGE_IDS',
   passwordHint: 'BANKSALAD_ZIP_PASSWORD_HINT',
+  // 마지막으로 **실제 데이터를 받은** 날. 마지막 실행 시각과 다르다 —
+  // 내보내기를 그만둬도 실행은 매일 성공하기 때문이다. dataAge_() 참고.
+  lastIngest: 'LAST_INGEST_DATE',
 };
 
 
@@ -268,6 +277,7 @@ function process_(opts) {
   pruneFacts_(folder);
 
   markProcessed_(props, found.id);
+  props.setProperty(PROP.lastIngest, stamp);
 
   return {
     ok: true, step: 'done',
@@ -404,6 +414,35 @@ function writeStatus_(result) {
 }
 
 /**
+ * 데이터가 며칠째 멈춰 있는가.
+ *
+ * ⚠️ **이 도구가 조용히 죽는 방식이 정확히 이거다.** 유저가 뱅샐 내보내기를
+ *    그만두면 매일 아침 트리거는 멀쩡히 돌고 '처리할 새 메일이 없다' 를
+ *    성공으로 적는다. 시트에는 초록 체크와 **오늘 날짜**가 찍힌다. 데이터는
+ *    석 달 전 것인데 화면은 계속 정상이다.
+ *
+ *    "마지막으로 언제 돌았나" 와 "데이터가 언제까지인가" 는 다른 질문이고,
+ *    유저에게 필요한 건 두 번째다.
+ */
+function dataAge_(props) {
+  var last = props.getProperty(PROP.lastIngest);
+  if (!last) return { last: null, days: null };
+  var d = new Date(last + 'T00:00:00');
+  if (isNaN(d.getTime())) return { last: null, days: null };
+  return { last: last, days: Math.floor((new Date().getTime() - d.getTime()) / 86400000) };
+}
+
+/** 신선도 한 줄. 오래됐으면 그 사실이 먼저 오게 한다. */
+function freshnessLine_(age) {
+  if (age.last === null) return '아직 받은 데이터가 없어요. 뱅크샐러드에서 내보내 주세요.';
+  if (age.days > CFG.staleDays) {
+    return '⚠️ 데이터가 ' + age.last + ' 에서 멈춰 있어요 (' + age.days + '일 전). ' +
+      '뱅크샐러드 앱에서 다시 내보내 주세요.';
+  }
+  return '데이터는 ' + age.last + ' 까지 있어요' + (age.days > 0 ? ' (' + age.days + '일 전)' : '');
+}
+
+/**
  * 시트에 붙어 있으면 첫 화면에도 상태를 적는다.
  * 유저가 시트를 열자마자 "잘 돌고 있나" 를 보게 하는 게 목적이다 —
  * Drive 의 status.json 을 열어보라고 할 수는 없다.
@@ -413,14 +452,30 @@ function writeStatusToSheet_(result) {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) return;
-    var sh = ss.getSheets()[0];
-    sh.getRange('B10').setValue((result.ok ? '✅ ' : '⚠️ ') + result.message);
-    sh.getRange('B11').setValue(
-      '마지막 확인 ' +
-      Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm'));
+    // 이름으로 먼저 찾는다. 유저가 시트를 하나 추가하면 [0] 은 남의 시트다.
+    var sh = ss.getSheetByName(STATUS_SHEET) || ss.getSheets()[0];
+    var age = dataAge_(PropertiesService.getScriptProperties());
+
+    // 데이터가 멈춰 있으면 그게 제일 중요한 소식이다. 실행 성공보다 앞에 온다.
+    var headline = age.days !== null && age.days > CFG.staleDays
+      ? freshnessLine_(age)
+      : (result.ok ? '✅ ' : '⚠️ ') + result.message;
+
+    // 앞에 '=' 가 오면 시트가 수식으로 읽는다. 우리 문자열은 항상 기호로
+    // 시작하지만, 메시지 출처가 늘어날 때를 대비해 여기서 한 번 막는다.
+    sh.getRange('B10').setValue(safeCell_(headline));
+    sh.getRange('B11').setValue(safeCell_(
+      freshnessLine_(age) + ' · 마지막 확인 ' +
+      Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')));
   } catch (e) {
     // 시트에 안 붙어 있거나 권한이 없다. 상태는 이미 Drive 에 남았으니 넘어간다.
   }
+}
+
+/** 시트가 수식으로 해석하지 않게 한다. */
+function safeCell_(s) {
+  var t = String(s);
+  return /^[=+\-@]/.test(t) ? "'" + t : t;
 }
 
 
@@ -444,7 +499,7 @@ function onOpen() {
       .addSeparator()
       .addItem('비밀번호 다시 넣기', 'menu_setPassword')
       .addItem('상태 보기', 'menu_status')
-      .addItem('업데이트 확인', 'menu_checkUpdate')
+      .addItem('버전 보기', 'menu_version')
       .addToUi();
   } catch (e) {
     // 시트에 바인딩되지 않은 상태(독립 스크립트)면 메뉴가 없다. 정상이다.
@@ -459,7 +514,7 @@ function menu_setup() {
   ui.alert('설정 완료',
     '매일 오전 7시에 자동으로 돌아갑니다.\n\n' +
     '뱅크샐러드 앱에서 데이터를 내보낼 때 방금 넣은 비밀번호를 ' +
-    '**매번 똑같이** 써 주세요. 다르면 해제하지 못합니다.\n\n' +
+    '「매번 똑같이」 써 주세요. 다르면 해제하지 못합니다.\n\n' +
     "'② 지금 한 번 돌리기' 로 바로 확인해 볼 수 있어요.",
     ui.ButtonSet.OK);
 }
@@ -480,78 +535,125 @@ function promptPassword_(ui) {
 
   PropertiesService.getScriptProperties().setProperty(PROP.password, pw);
   // 잊었을 때 확인할 수 있게 힌트만 남긴다. 값 자체는 절대 로그·시트에 안 쓴다.
-  PropertiesService.getScriptProperties().setProperty(
-    PROP.passwordHint, pw.charAt(0) + new Array(pw.length).join('*') + pw.charAt(pw.length - 1));
+  PropertiesService.getScriptProperties().setProperty(PROP.passwordHint, hint_(pw));
   return true;
+}
+
+/**
+ * 첫 글자 · 자릿수 · 끝 글자. **자릿수가 맞아야 한다** — 문서에 그렇게
+ * 약속해 놨고, 유저는 이 별을 세어서 비밀번호를 떠올린다. 별 개수가 하나
+ * 많으면 틀린 길이로 입력하고 'zip 해제 실패' 를 본다.
+ *
+ * 짧은 비밀번호는 힌트가 곧 답이 된다. 3자 미만이면 자릿수만 알려준다.
+ */
+function hint_(pw) {
+  var n = pw.length;
+  if (n < 3) return n + '자';
+  return pw.charAt(0) + new Array(n - 1).join('*') + pw.charAt(n - 1);
 }
 
 function menu_runNow() {
   var ui = SpreadsheetApp.getUi();
-  var r = process_({ force: true });
-  writeStatus_(r);
-  ui.alert(r.ok ? '완료' : '실패', r.message, ui.ButtonSet.OK);
+
+  // 아침 7시 트리거와 겹칠 수 있다. 겹치면 임시 시트가 둘, latest.json 쓰기가
+  // 둘이 되고 pruneFacts_ 가 서로가 쓰는 걸 지운다. runDaily 는 잠그면서
+  // 정작 사람이 누르는 이 경로를 안 잠그고 있었다.
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10 * 1000)) {
+    ui.alert('잠시만요', '지금 자동 실행이 돌고 있어요. 1분 뒤에 다시 눌러 주세요.', ui.ButtonSet.OK);
+    return;
+  }
+
+  try {
+    var r = process_({ force: true });
+    writeStatus_(r);
+    ui.alert(r.ok ? '완료' : '실패', r.message, ui.ButtonSet.OK);
+  } catch (e) {
+    // 라이브러리를 못 찾으면 api_() 가 전역을 돌려주고 unzip 이 undefined 다.
+    // 그대로 두면 유저는 'TypeError: ... is not a function' 을 본다.
+    var msg = String((e && e.message) || e);
+    try { writeStatus_({ ok: false, step: 'error', message: msg }); } catch (ignored) {}
+    ui.alert('실패',
+      msg + '\n\n' + versionText_() + '\n\n' +
+      '집계 라이브러리를 못 불러온 것일 수 있어요.',
+      ui.ButtonSet.OK);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function menu_status() {
   var ui = SpreadsheetApp.getUi();
+  var props = PropertiesService.getScriptProperties();
   var folder = ensureFolder_(DriveApp, CFG.folderName);
   var s = readJson_(folder, 'status.json');
-  var hint = PropertiesService.getScriptProperties().getProperty(PROP.passwordHint);
+  var hint = props.getProperty(PROP.passwordHint);
   ui.alert('상태',
-    (s ? s.at + '\n' + s.message : '아직 한 번도 돌지 않았습니다.') +
+    // 신선도가 먼저다. '마지막 실행' 은 내보내기를 그만둬도 매일 갱신된다.
+    freshnessLine_(dataAge_(props)) + '\n\n' +
+    (s ? '마지막 실행 ' + s.at + '\n' + s.message : '아직 한 번도 돌지 않았습니다.') +
     (hint ? '\n\n비밀번호 힌트: ' + hint : ''),
     ui.ButtonSet.OK);
 }
 
 
-// ── 업데이트 확인 (D8) ─────────────────────────────────────────────
+// ── 버전 보기 ─────────────────────────────────────────────────────
 //
-// **코드를 받아오지 않는다. 버전 숫자만 받아 비교한다.**
+// **이 스크립트는 인터넷에 나가지 않는다.** UrlFetchApp 이 한 줄도 없고,
+// 매니페스트에 script.external_request 스코프도 없다. 그래서 "내 데이터가
+// 어디로 새나" 는 코드를 읽지 않고 **권한 목록만 보고** 판단할 수 있다.
 //
-// 원격 코드를 받아 실행하는 스크립트는 공급망 백도어다. 이 스크립트는
-// Gmail 전체 읽기 권한으로 도는데, 저장소가 털리면 그 권한으로 남의 코드가
-// 돈다. 그래서 가져오는 건 텍스트 한 줄이고, 갱신은 유저가 라이브러리
-// 버전을 바꿔서 한다 — **매 갱신마다 명시적 동의가 일어난다.**
+// 예전에는 GitHub 에서 버전 문자열 하나를 받아 새 버전을 알려줬다. 지웠다.
+// 얻는 것(알림)보다 치르는 값이 컸다 —
+//
+//   · 동의 화면에 '외부 서비스 연결' 한 줄이 붙는다. Gmail 전체 읽기를
+//     이미 받는 도구에서 이 줄은 "밖으로 보낼 수도 있다" 로 읽힌다.
+//   · 알림을 받아도 갱신은 어차피 편집기에서 손으로 하는 일이다.
+//     알림이 줄여주는 수고가 거의 없다.
+//   · 네트워크·권한·404·형식 오류를 다 다뤄야 했고, 실제로 유저에게
+//     "업데이트 확인에서 오류" 로 처음 새어 나갔다.
+//
+// 대신 지금 쓰는 버전을 보여주고, 최신은 저장소에서 보게 한다.
 
-var VERSION_URL = 'https://raw.githubusercontent.com/sbigstar0310/k-money/main/VERSION';
+var PROJECT_URL = 'https://github.com/sbigstar0310/k-money';
 
-function menu_checkUpdate() {
+/**
+ * 이 파일(main.gs)의 버전. **라이브러리 버전과 다른 값이다.**
+ *
+ * 라이브러리(집계 코어)는 유저가 버전 드롭다운으로 갈아끼울 수 있지만,
+ * 이 파일은 유저의 시트 안에 복사돼 있어서 **우리가 고쳐도 닿지 않는다.**
+ * 두 개를 하나인 척 보여주면 옛 main.gs 로 도는 걸 아무도 모른다.
+ *
+ * VERSION 파일과 같아야 한다 — test/main.test.js 가 강제한다.
+ */
+var MAIN_VERSION = '0.1.1';
+
+function menu_version() {
   var ui = SpreadsheetApp.getUi();
-  var r = checkForUpdate();
-  if (r.error) { ui.alert('확인 실패', r.error, ui.ButtonSet.OK); return; }
-  ui.alert(r.outdated ? '새 버전이 있습니다' : '최신입니다',
-    '지금 쓰는 버전: ' + r.current + '\n최신 버전: ' + r.latest +
-    (r.outdated
-      ? '\n\n확장 프로그램 → Apps Script → 라이브러리 → 버전을 바꿔 주세요.\n' +
-        '설정과 데이터는 그대로 유지됩니다.'
-      : ''),
+  ui.alert('버전',
+    versionText_() + '\n\n' +
+    '최신 버전과 바뀐 점은 여기 있어요:\n' + PROJECT_URL + '\n\n' +
+    '집계 라이브러리를 올리려면\n' +
+    '확장 프로그램 → Apps Script → 왼쪽 "라이브러리" → kmoneylib\n' +
+    '→ 버전에서 가장 큰 번호를 고르고 저장.\n' +
+    '(번호는 1, 2, 3… 으로 매겨져 있어서 위 숫자와 모양이 달라요)\n\n' +
+    '비밀번호와 지금까지 쌓인 데이터는 그대로 있습니다.',
     ui.ButtonSet.OK);
 }
 
-function checkForUpdate() {
-  var api = api_();
-  var current = (typeof api.version === 'function' && api.version()) || 'unknown';
+/**
+ * 지금 도는 버전 두 줄. 라이브러리 호출은 **컨텍스트를 넘으므로** 던질 수
+ * 있다 — 공유가 풀렸거나 core.gs 없이 library-api.gs 만 올라간 경우.
+ * 감싸지 않으면 버전을 보려다 오류 대화상자를 보게 된다.
+ */
+function versionText_() {
+  var lib;
   try {
-    var res = UrlFetchApp.fetch(VERSION_URL, { muteHttpExceptions: true });
-    if (res.getResponseCode() !== 200) {
-      return { error: '버전 정보를 못 읽었습니다 (HTTP ' + res.getResponseCode() + ')', current: current };
-    }
-    // 받아온 건 "0.1.0" 같은 문자열이다. 실행하지 않는다.
-    var latest = res.getContentText().trim();
-    if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(latest)) {
-      return { error: '버전 형식이 이상합니다: ' + latest.slice(0, 40), current: current };
-    }
-    return { current: current, latest: latest, outdated: compareVersions_(current, latest) < 0 };
+    var api = resolveApi_().api;
+    lib = (typeof api.version === 'function' && api.version()) || null;
   } catch (e) {
-    return { error: String(e && e.message || e), current: current };
+    lib = null;
   }
-}
-
-function compareVersions_(a, b) {
-  var x = String(a).split('.'), y = String(b).split('.');
-  for (var i = 0; i < 3; i++) {
-    var d = (Number(x[i]) || 0) - (Number(y[i]) || 0);
-    if (d) return d < 0 ? -1 : 1;
-  }
-  return 0;
+  return '시트 스크립트: ' + MAIN_VERSION + '\n' +
+    '집계 라이브러리: ' + (lib || '못 찾았습니다 — 확장 프로그램 → Apps Script → 라이브러리 확인');
 }

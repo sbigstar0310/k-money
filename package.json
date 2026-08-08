@@ -8,7 +8,7 @@
     "build": "node scripts/build-gs.js",
     "check": "node scripts/build-gs.js && node --test test/",
     "run:local": "node scripts/run-local.js",
-    "version": "node -e \"require('fs').writeFileSync('VERSION', require('./package.json').version + '\\n')\" && node scripts/build-gs.js && git add VERSION appsscript/core.gs"
+    "version": "node scripts/stamp-version.js && node scripts/build-gs.js && git add VERSION appsscript/core.gs appsscript/main.gs"
   },
   "engines": {
     "node": ">=20"
