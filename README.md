@@ -362,12 +362,13 @@ LLM은 이미 확정된 숫자를 읽고 해석·대화만 한다.**
 
 | 문서 | 내용 |
 |---|---|
-| `docs/positioning.md` | 타겟·문제·차별점·비전 |
+| **`docs/DECISIONS.md`** | **결정 기록 — 확정 · 뒤집힌 것 · 미결. 여기부터 볼 것** |
+| `docs/positioning.md` | 타겟·문제·차별 축·이름과 목소리 |
 | `docs/product.md` | 유즈케이스 · 서빙 형태 · **규제 경계선** |
 | `docs/pipeline-v1.md` | 완전 자동 파이프라인 설계 · 검증 결과 |
 | `docs/project-brief.md` | 확정 사항 이력 |
 | `docs/setup-gmail.md` | Gmail API OAuth 설정 |
-| `docs/architecture.md` | (일부 무효) 초기 로컬 우선 검토 |
+| `docs/architecture.md` | ❌ 일부 무효 — 초기 로컬 우선 검토 |
 
 ## 개발
 
