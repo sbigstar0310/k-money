@@ -1,0 +1,39 @@
+# npm run check 를 매 푸시마다 돌린다.
+#
+# ⚠️ **npm test 만으로는 부족하다.** 안전장치 중 하나가 '커밋된 core.gs 가
+#    지금 core/ 에서 나온 것인가' 인데, 이건 빌드를 돌려야 판정된다.
+#    사람은 npm test 를 돌리지 npm run check 를 기억하지 않는다.
+#    실제로 core/ 를 고치고 빌드를 안 한 채 133개가 전부 초록이었던 적이 있고,
+#    그때 프로덕션에 나가는 건 커밋된 옛 번들이었다.
+
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 의존성이 없다 (테스트는 node --test, 빌드는 fs 뿐).
+      # npm ci 를 쓰면 lock 파일이 없어 실패한다.
+      - name: 빌드 + 테스트
+        run: npm run check
+
+      # 빌드 산물이 커밋된 것과 달라지면 실패시킨다.
+      # check 안의 테스트가 이미 보지만, 여기서 한 번 더 눈에 보이게 한다.
+      - name: 빌드 산물이 커밋본과 같은가
+        run: git diff --exit-code -- appsscript/core.gs
+
+      - name: 샘플이 최신인가
+        run: |
+          node scripts/make-sample.js
+          git diff --exit-code -- docs/sample-latest.json

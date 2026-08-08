@@ -32,7 +32,6 @@ function loadBundle() {
   const saved = globalThis.KM;
   globalThis.KM = undefined;
   try {
-    // eslint-disable-next-line no-new-func
     return new Function(src + '\nreturn globalThis.KM;')();
   } finally {
     globalThis.KM = saved;
