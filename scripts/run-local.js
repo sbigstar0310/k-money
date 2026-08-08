@@ -13,7 +13,7 @@ const fs = require('fs');
 const path = require('path');
 
 // core 는 globalThis.KM 에 스스로를 붙인다. 의존 순서대로 읽어들인다.
-['model', 'layout', 'analyze', 'parse', 'aggregate'].forEach(function (m) {
+['model', 'layout', 'analyze', 'parse', 'profile', 'aggregate'].forEach(function (m) {
   require(path.join(__dirname, '..', 'core', m + '.js'));
 });
 const KM = globalThis.KM;

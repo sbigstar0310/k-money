@@ -23,7 +23,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const ORDER = ['model', 'layout', 'analyze', 'parse', 'aggregate']; // 의존 순서
+const ORDER = ['model', 'layout', 'analyze', 'parse', 'profile', 'aggregate']; // 의존 순서
 const root = path.join(__dirname, '..');
 const dest = path.join(root, 'appsscript', 'core.gs');
 

@@ -39,8 +39,13 @@ test('실데이터가 끝까지 돈다', opts, () => {
   assert.strictEqual(f.flow.net, f.flow.income - f.flow.expense);
 
   // 합계는 계산이어야 한다 — 수식 셀을 읽었다면 0 이나 NaN 이 나온다
-  assert.ok(Number.isFinite(f.balance.totalAssets) && f.balance.totalAssets > 0);
-  assert.strictEqual(f.balance.netWorth, f.balance.totalAssets - f.balance.totalDebt);
+  assert.ok(Number.isFinite(f.balance.netWorth) && f.balance.netWorth > 0);
+
+  // 잘라낸 목록의 나머지를 밝히지 않으면 LLM 이 검산했을 때 안 맞는다
+  const cats = f.categories.items.reduce((s, c) => s + c.amount, 0) + (f.categories.otherTotal || 0);
+  assert.strictEqual(cats, f.flow.expense, '카테고리 합 + 나머지 = 지출');
+  const accs = f.balance.accounts.reduce((s, a) => s + a.amount, 0) + (f.balance.otherAccountsTotal || 0);
+  assert.strictEqual(accs - f.balance.totalDebt, f.balance.netWorth, '계좌 합 + 나머지 − 부채 = 순자산');
 });
 
 test('실데이터 산출물이 커넥터 한도 안에 든다', opts, () => {

@@ -2,7 +2,7 @@
  * ⚠️ 자동 생성 파일 — 직접 고치지 마라.
  *
  *   생성: node scripts/build-gs.js
- *   원본: core/model.js, core/layout.js, core/analyze.js, core/parse.js, core/aggregate.js
+ *   원본: core/model.js, core/layout.js, core/analyze.js, core/parse.js, core/profile.js, core/aggregate.js
  *
  * 고칠 일이 있으면 core/ 를 고치고 다시 생성하라. 여기서 고치면
  * 다음 생성 때 조용히 덮어써진다.
@@ -279,7 +279,7 @@ KM.layout = (function () {
  * 집계 — 산출물이 실어 나를 숫자를 만드는 계층.
  *
  * 여기서 판단은 하지 않는다. "897만원이 문제다" 는 LLM 이 말하고,
- * 우리는 "이체를 본인/타인으로 갈랐더니 타인 쪽 순액이 8,967,889" 를 만든다.
+ * 우리는 "이체를 본인/타인으로 갈랐더니 타인 쪽 순액이 8,917,889" 를 만든다.
  *
  * ━━ 이 파일의 존재 이유 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  *
@@ -553,13 +553,7 @@ KM.analyze = (function () {
     var allMonths = monthRange(rows[0].month, rows[rows.length - 1].month);
     if (allMonths.length < minMonths) return [];
 
-    var cats = {};
-    for (var i = 0; i < txns.length; i++) {
-      var t = txns[i];
-      if (t.kind !== M.Kind.EXPENSE) continue;
-      if (!cats[t.major]) cats[t.major] = {};
-      cats[t.major][M.month(t)] = (cats[t.major][M.month(t)] || 0) + M.outflow(t);
-    }
+    var cats = categoryByMonth(txns);
 
     var out = [];
     Object.keys(cats).forEach(function (cat) {
@@ -603,6 +597,79 @@ KM.analyze = (function () {
       .sort(function (a, b) { return b.amount - a.amount; });
   }
 
+  /** 대분류 → { 월: 지출 순액 }. 급증 판정과 월별 추이가 같이 쓴다. */
+  function categoryByMonth(txns) {
+    var acc = {};
+    for (var i = 0; i < txns.length; i++) {
+      var t = txns[i];
+      if (t.kind !== M.Kind.EXPENSE) continue;
+      if (!acc[t.major]) acc[t.major] = {};
+      acc[t.major][M.month(t)] = (acc[t.major][M.month(t)] || 0) + M.outflow(t);
+    }
+    return acc;
+  }
+
+  /**
+   * 가맹점별 지출.
+   *
+   * 카테고리 합계만으로는 "온라인쇼핑 845만원"에서 멈춘다. 무엇을 샀는지는
+   * 이 수준까지 내려와야 보이고, 원본 거래 없이는 재구성할 수 없다.
+   */
+  function byMerchant(txns) {
+    var acc = {};
+    for (var i = 0; i < txns.length; i++) {
+      var t = txns[i];
+      if (t.kind !== M.Kind.EXPENSE || !t.desc) continue;
+      if (!acc[t.desc]) acc[t.desc] = { merchant: t.desc, category: t.major, amount: 0, count: 0 };
+      acc[t.desc].amount += M.outflow(t);
+      acc[t.desc].count++;
+    }
+    return Object.keys(acc)
+      .map(function (k) { return acc[k]; })
+      .filter(function (m) { return m.amount > 0; })
+      .sort(function (a, b) { return b.amount - a.amount; });
+  }
+
+  /**
+   * 월 순현금흐름 — **이 파일에서 가장 틀리기 쉬운 값**.
+   *
+   * 남은 필드로 만들 수 있는 그럴듯한 공식이 여섯 개인데 그중 넷이 부호를
+   * 뒤집는다 (실측). 정답은 하나뿐이다:
+   *
+   *   수입 − 지출 + **남과 오간 이체 순액**
+   *
+   * 이체를 통째로 빼면 −1,136만원이 나오는데 순자산 1,539만원·부채 0과
+   * 앞뒤가 안 맞는다. 통째로 더하면 연동 안 된 내 계좌의 돈을 새 돈으로 센다.
+   * **본인 명의 이체 순액은 더하지 않는다** — 순자산을 늘리는 돈이 아니다.
+   *
+   * 이 한 줄이 우리가 파는 것이다. 산수가 아니라 어떤 식을 쓸지에 대한 판단.
+   */
+  function pace(txns, owner) {
+    var t = totals(txns);
+    var tb = transferBalance(txns, owner);
+    var rows = monthlyTotals(txns);
+    if (!rows.length) return null;
+
+    var days = [];
+    for (var i = 0; i < txns.length; i++) {
+      if (txns[i].kind !== M.Kind.TRANSFER) days.push(txns[i].day);
+    }
+    days.sort();
+    var months = dayDiff(days[0], days[days.length - 1]) / DAYS_PER_MONTH;
+    if (months < 1) months = 1;
+
+    var net = t.income - t.expense + tb.externalNet;
+    var spikeExcess = spikes(txns).reduce(function (s, x) { return s + x.excess; }, 0);
+
+    return {
+      monthly: Math.round(net / months),
+      // 급증을 일회성으로 보면 부호가 뒤집힐 수 있다 (실측 −20만 → +6만).
+      // 어느 쪽인지는 데이터가 못 정한다. 그래서 둘 다 싣는다.
+      monthlyExSpikes: spikeExcess > 0 ? Math.round((net + spikeExcess) / months) : null,
+      observedMonths: Math.round(months * 10) / 10,
+    };
+  }
+
   function refunds(txns) {
     var items = txns.filter(M.isRefund);
     return { count: items.length, total: M.sum(items, function (t) { return t.amount; }) };
@@ -612,7 +679,8 @@ KM.analyze = (function () {
     median: median, monthIndex: monthIndex, monthRange: monthRange, dayDiff: dayDiff,
     monthlyTotals: monthlyTotals, totals: totals, avgMonthlyExpense: avgMonthlyExpense,
     transferBalance: transferBalance, recurring: recurring, spikes: spikes,
-    byCategory: byCategory, refunds: refunds,
+    byCategory: byCategory, categoryByMonth: categoryByMonth,
+    byMerchant: byMerchant, pace: pace, refunds: refunds,
   };
 })();
 
@@ -869,36 +937,146 @@ KM.parse = (function () {
 
 
 // ════════════════════════════════════════════════════════════════════
+// core/profile.js
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * 유저 컨텍스트 — 대화로 쌓이는 것.
+ *
+ * `Drive/k-money/profile.json`. **LLM이 대화 중에 쓴다.** 유저가 JSON을
+ * 손으로 고치는 일은 없어야 한다 — 타겟이 사회 초년생이다.
+ *
+ * ━━ 진술은 관측을 이기지 않는다 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ *
+ * 유저가 "나 월 180 벌어"라고 말해도 그게 기록을 덮어쓰지 않는다.
+ *
+ *   기록이 믿을 만하다        → 기록을 쓴다
+ *   기록이 못 미덥다          → 진술을 쓰되 **출처를 밝힌다**
+ *   둘이 크게 다르다          → 둘 다 보여주고 묻는다
+ *
+ * 이 규칙이 LLM 환각에 대한 방어이기도 하다. 진술값에는 항상 꼬리표가 붙으므로,
+ * 잘못 기록된 값이 리포트에 조용히 섞이지 않는다.
+ *
+ * ━━ 모든 값에 출처와 시점을 남긴다 ━━━━━━━━━━━━━━━━━━━━━━━━━━
+ *
+ * 연봉이 오르면 갱신해야 하는데, 언제 들은 말인지 모르면 갱신할 시점을 모른다.
+ * 그래서 { value, source, at } 꼴을 쓴다. 맨값도 받아주되 정규화한다.
+ */
+
+var KM = (globalThis.KM = globalThis.KM || {});
+
+KM.profile = (function () {
+  'use strict';
+
+  var SCHEMA = 'k-money/profile@1';
+
+  function defaults() {
+    return {
+      schema: SCHEMA,
+      goals: [],
+      assumptions: {},
+    };
+  }
+
+  /** { value, source, at } 꼴로 통일한다. 맨값이 와도 받아준다. */
+  function entry(v, source, at) {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'object' && 'value' in v) {
+      return { value: v.value, source: v.source || 'unknown', at: v.at || null };
+    }
+    return { value: v, source: source || 'unknown', at: at || null };
+  }
+
+  function valueOf(e, fallback) {
+    return e && e.value !== null && e.value !== undefined ? e.value : fallback;
+  }
+
+  /**
+   * 읽은 JSON을 안전한 모양으로. 깨졌거나 없으면 기본값으로 돌아간다.
+   * 여기서 던지면 안 된다 — 프로필이 없다고 리포트 전체가 멈추면 안 되기 때문이다.
+   */
+  function normalize(raw) {
+    var p = defaults();
+    if (!raw || typeof raw !== 'object') return p;
+
+    if (Array.isArray(raw.goals)) {
+      p.goals = raw.goals
+        .filter(function (g) { return g && typeof g.amount === 'number' && g.amount > 0; })
+        .map(function (g) {
+          return {
+            id: String(g.id || g.label || 'goal'),
+            label: String(g.label || g.id || '목표'),
+            // 목표를 숫자로 바꾸는 건 **우리 일이 아니다.**
+            // "전세 구하고 싶어", "20대 남성 상위 10%" 같은 건 바깥 지식과 해석이
+            // 필요하고, 그건 LLM 이 잘하고 우리가 못한다. 우리는 숫자를 받아 산수만 한다.
+            amount: Math.round(g.amount),
+            // 유저가 직접 말한 숫자인지, LLM 이 대신 추정한 숫자인지 구분한다.
+            // 추정이면 LLM 이 "1.5억으로 잡았는데 맞나요?" 라고 되물어야 한다.
+            estimated: !!g.estimated,
+            by: g.by || null, // 'YYYY-MM'. 없어도 된다 — 시점 없는 목표도 목표다
+            byIsDefault: !!g.byIsDefault,
+            source: g.source || 'unknown',
+            at: g.at || null,
+          };
+        });
+    }
+
+    var a = raw.assumptions || {};
+    ['monthlyIncome', 'monthlyExpense', 'annualReturn'].forEach(function (k) {
+      var e = entry(a[k]);
+      if (e && typeof e.value === 'number' && isFinite(e.value)) p.assumptions[k] = e;
+    });
+
+    return p;
+  }
+
+  /** 유저가 말한 값. 없으면 null. */
+  function stated(profile, key) {
+    return valueOf(profile.assumptions[key], null);
+  }
+
+  return {
+    SCHEMA: SCHEMA,
+    defaults: defaults, normalize: normalize, entry: entry, valueOf: valueOf,
+    stated: stated,
+  };
+})();
+
+
+// ════════════════════════════════════════════════════════════════════
 // core/aggregate.js
 // ════════════════════════════════════════════════════════════════════
 
 /**
  * 산출물 조립 — Drive 에 올라가고 LLM 이 읽을 JSON.
  *
- * ━━ 이 파일이 곧 프롬프트다 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ * ━━ 무엇을 넣고 무엇을 뺄지 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  *
- * 우리는 프롬프트를 소유하지 않는다. 유저의 Claude·ChatGPT·Gemini 가 Drive 를
- * 읽고, 시스템 프롬프트도 모델도 우리 것이 아니다. 그래서 **파일 자체가
- * 우리가 가진 유일한 표면**이고, 두 가지를 여기서 해결해야 한다.
+ * **우리가 파는 건 산수가 아니라 "어떤 식을 쓸지"다.**
  *
- *   (1) LLM 이 계산하게 두지 않는다 → 필요한 파생값을 전부 미리 넣는다.
- *   (2) 못 믿을 값은 넣지 않는다   → null 이 아니라 **키 자체를 없앤다.**
- *                                    없는 숫자는 인용될 수 없다.
+ *   식이 하나뿐이면            → 넣지 않는다. LLM 이 한다
+ *   식이 여럿이고 하나만 맞으면 → 넣는다. 우리가 계산한다
+ *   원본을 훑어야 나오면        → 넣는다. LLM 이 할 수 없다
+ *   상수를 우리가 골랐으면      → 넣지 않는다. 그건 판단이지 집계가 아니다
  *
- * ━━ 커넥터에 대해 실측으로 확인한 것 ━━━━━━━━━━━━━━━━━━━━━━━━
+ * 실측 근거: `pace` 를 빼면 남은 필드로 만들 수 있는 그럴듯한 공식이 여섯 개인데
+ * **그중 넷이 부호를 뒤집는다.** 프런티어 모델은 나눗셈을 안 틀린다 — 틀리는 건
+ * 식의 선택이다. 그게 이 파일의 존재 이유다.
  *
- * 1. JSON 은 **읽힌다.** 한때 "빈 문자열로 나온다" 고 기록해 뒀는데 틀렸다.
- *    갓 만든 파일은 커넥터가 아직 처리하지 못해 잠시 비어 보일 뿐이고,
- *    몇 분 뒤에는 정상적으로 읽힌다. 크기와도 MIME 과도 무관했다.
+ * 한때 여기에 goalTable(우리가 5천만·1억·2억을 고름), levers(레버 4종과 10%·20%를
+ * 고름), suggestedHorizons(30·35·40세를 고름), 복리 계산이 있었다. 전부 뺐다.
+ * 유저 질문 25개를 역산했을 때 **그것들이 필요한 질문이 하나도 없었다.**
  *
- * 2. 다만 마크다운 특수문자가 이스케이프된다. 실측으로 확인된 대상:
- *      [ ] < > ! \ # * _ ~ `
- *    안전한 것: { } ( ) : ; , . ? / | + = % & @ $ " ' -
- *    → JSON 의 뼈대({ } " : ,)는 멀쩡하고 배열 괄호만 \[ \] 가 된다.
- *      엄격한 파서는 깨지지만 LLM 이 읽는 데는 지장이 없다.
- *    → 식별자에 밑줄을 쓰지 않는 이유가 이것이다 (snake_case → camelCase).
+ * ━━ 절단은 반드시 밝힌다 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  *
- * 3. 그래도 거래 원본은 넣지 않고 목록마다 상한을 둔다. 토큰과 가독성 문제다.
+ * 목록을 자르면서 말을 안 하면, 합계를 검산한 LLM 이 안 맞는 걸 보고
+ * 데이터를 못 믿거나 없는 사실을 지어낸다. 실측에서 카테고리 246,450원,
+ * 계좌 45,629원, 이체 상대 3,050,875원이 말없이 사라지고 있었다.
+ *
+ * ━━ 커넥터 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ *
+ * JSON 은 읽힌다. 갓 만든 파일이 몇 분간 비어 보일 뿐이다(크기·MIME 무관).
+ * 다만 마크다운 특수문자가 이스케이프되므로 식별자에 밑줄을 쓰지 않는다.
  */
 
 var KM = (globalThis.KM = globalThis.KM || {});
@@ -909,12 +1087,12 @@ KM.aggregate = (function () {
   var M = KM.model;
   var A = KM.analyze;
 
-  var SCHEMA = 'k-money/facts@1';
-  var LIMITS = { parties: 8, spikes: 5, recurring: 10, categories: 12 };
+  var SCHEMA = 'k-money/facts@2';
+  var LIMITS = { parties: 8, spikes: 5, recurring: 12, categories: 12, merchants: 12, accounts: 15, matrixCategories: 8 };
 
-  // 이 아래면 분류 오류로 보지 않는다. 수입이 아니라 **지출** 기준인 것이
-  // 중요하다 — 지금 문제가 '수입이 덜 잡힌다' 인데 그 수입으로 문턱을 잡으면
-  // 결함이 자기 탐지 문턱을 같이 낮추는 순환이 된다.
+  // 이 아래면 보고하지 않는다. **지출** 기준인 것이 중요하다 — 지금 문제가
+  // '수입이 덜 잡힌다' 인데 그 수입으로 문턱을 잡으면 결함이 자기 탐지 문턱을
+  // 같이 낮추는 순환이 된다.
   function materialFloor(flow) {
     return Math.max(Math.round(flow.expense * 0.05), 200000);
   }
@@ -923,11 +1101,11 @@ KM.aggregate = (function () {
     opts = opts || {};
     var txns = extract.txns;
     var snap = extract.snapshot;
+    var owner = snap ? snap.owner : null;
 
     var flow = A.totals(txns);
-    var monthly = A.monthlyTotals(txns);
-    var avgExpense = A.avgMonthlyExpense(txns);
-    var tb = A.transferBalance(txns, snap ? snap.owner : null);
+    var monthly = withPartialFlags(A.monthlyTotals(txns), txns);
+    var tb = A.transferBalance(txns, owner);
     var material = materialFloor(flow);
 
     var out = {
@@ -940,33 +1118,19 @@ KM.aggregate = (function () {
         income: flow.income,
         expense: flow.expense,
         net: flow.net,
-        avgMonthlyExpense: avgExpense,
+        avgMonthlyExpense: A.avgMonthlyExpense(txns),
         monthly: monthly,
       },
 
-      // 이체는 '내 계좌 간 이동'이라 순액이 0이어야 정상이다.
-      transfers: {
-        self: {
-          net: tb.selfNet,
-          count: tb.selfCount,
-          matchedByMaskedName: tb.selfMatchedByMask,
-        },
-        external: {
-          net: tb.externalNet,
-          gross: tb.externalGross,
-          in: tb.externalIn,
-          out: tb.externalOut,
-          count: tb.externalCount,
-          topInflows: tb.inflows.slice(0, LIMITS.parties),
-          topOutflows: tb.outflows.slice(0, LIMITS.parties),
-          truncated: {
-            inflows: Math.max(0, tb.inflows.length - LIMITS.parties),
-            outflows: Math.max(0, tb.outflows.length - LIMITS.parties),
-          },
-        },
-      },
+      // 이 파일에서 가장 틀리기 쉬운 값. analyze.pace 주석 참조.
+      pace: A.pace(txns, owner),
 
-      categories: { expense: A.byCategory(txns).slice(0, LIMITS.categories) },
+      // 이체는 '내 계좌 간 이동'이라 self.net 은 0에 가까워야 정상이다.
+      transfers: transferBlock(tb),
+
+      categories: capped(A.byCategory(txns), LIMITS.categories, 'category', 'amount'),
+      merchants: capped(A.byMerchant(txns), LIMITS.merchants, 'merchant', 'amount'),
+      categoryMonthly: matrix(txns, monthly),
       refunds: A.refunds(txns),
       recurring: recurringBlock(txns),
       spikes: A.spikes(txns).filter(function (s) { return s.excess >= material; })
@@ -975,22 +1139,25 @@ KM.aggregate = (function () {
 
     if (snap) {
       out.balance = balanceBlock(snap);
-      out.cash = cashBlock(snap, avgExpense);
+      out.cash = cashBlock(snap, out.flow.avgMonthlyExpense);
       out.investments = investmentBlock(snap);
+      if (snap.age) out.snapshotAge = snap.age;
     }
 
-    out.dataQuality = quality(tb, flow, extract, material);
+    // 유저가 대화로 쌓은 것. **계산하지 않고 그대로 실어 나른다** —
+    // 목표를 숫자로 바꾸는 건 LLM 일이고, 우리는 세션 사이를 잇는 역할만 한다.
+    var profile = KM.profile.normalize(opts.profile);
+    if (profile.goals.length || Object.keys(profile.assumptions).length) {
+      out.profile = { goals: profile.goals, assumptions: profile.assumptions };
+    }
 
-    // (2) 못 믿을 값은 키를 만들지 않는다.
-    var unclassified = Math.abs(tb.externalGross);
-    if (flow.income > 0 && unclassified < flow.income * 0.05) {
+    out.dataQuality = quality(tb, extract, material);
+
+    // 못 믿을 값은 키를 만들지 않는다. null 이면 인용되고, 없으면 인용될 수 없다.
+    if (flow.income > 0 && Math.abs(tb.externalGross) < flow.income * 0.05) {
       out.flow.savingsRate = Math.round((flow.net / flow.income) * 1000) / 1000;
     } else {
-      out.flow.savingsRateOmitted = {
-        reason: 'unclassifiedTransfers',
-        unclassifiedGross: unclassified,
-        recordedIncome: flow.income,
-      };
+      out.flow.savingsRateOmitted = 'unclassifiedTransfers';
     }
 
     out.hints = HINTS;
@@ -1004,18 +1171,108 @@ KM.aggregate = (function () {
     return { from: from, to: to, days: A.dayDiff(from, to) };
   }
 
+  /**
+   * 양끝 달은 대개 잘려 있다. 실측에서 2026-08 이 **8일치 655,250원**인데
+   * 표시가 없어 "이번 달 아껴 썼네" 로 읽힐 수 있었다. 한 줄로 막는다.
+   */
+  function withPartialFlags(rows, txns) {
+    if (!rows.length) return rows;
+    var days = txns.filter(function (t) { return t.kind !== M.Kind.TRANSFER; })
+                   .map(function (t) { return t.day; }).sort();
+    var from = days[0], to = days[days.length - 1];
+    var lastDay = new Date(Number(to.slice(0, 4)), Number(to.slice(5, 7)), 0).getDate();
+
+    if (from.slice(8) !== '01') rows[0].partial = true;
+    if (Number(to.slice(8)) < lastDay) {
+      rows[rows.length - 1].partial = true;
+      rows[rows.length - 1].daysObserved = Number(to.slice(8));
+    }
+    return rows;
+  }
+
+  /** 목록을 자르되 **잘라낸 총액을 반드시 밝힌다.** */
+  function capped(list, limit, keyField, amountField) {
+    var head = list.slice(0, limit);
+    var rest = list.slice(limit);
+    var out = { items: head };
+    if (rest.length) {
+      out.otherCount = rest.length;
+      out.otherTotal = M.sum(rest, function (x) { return x[amountField]; });
+    }
+    return out;
+  }
+
+  function transferBlock(tb) {
+    var inRest = tb.inflows.slice(LIMITS.parties);
+    var outRest = tb.outflows.slice(LIMITS.parties);
+    var block = {
+      self: { net: tb.selfNet, count: tb.selfCount, matchedByMaskedName: tb.selfMatchedByMask },
+      external: {
+        net: tb.externalNet,
+        // 순액이 0이어도 총액은 클 수 있다. 700만 받고 700만 보내면 순액 0이지만
+        // 1,400만원이 수입에도 지출에도 안 잡힌 상태다.
+        gross: tb.externalGross,
+        in: tb.externalIn,
+        out: tb.externalOut,
+        count: tb.externalCount,
+        topInflows: tb.inflows.slice(0, LIMITS.parties),
+        topOutflows: tb.outflows.slice(0, LIMITS.parties),
+      },
+    };
+    if (inRest.length || outRest.length) {
+      block.external.other = {
+        inflowsCount: inRest.length,
+        inflowsTotal: M.sum(inRest, function (p) { return p.net; }),
+        outflowsCount: outRest.length,
+        outflowsTotal: M.sum(outRest, function (p) { return p.net; }),
+      };
+    }
+    return block;
+  }
+
+  /**
+   * 카테고리 × 월 교차.
+   *
+   * 이게 없으면 "이번 달 왜 많이 썼어?" 에 답할 수 없다. 카테고리는 연간 합계뿐,
+   * 월별은 총액뿐이라 범인을 못 짚는다. 제품이 약속한 문제의 절반이 여기 걸려 있다.
+   */
+  function matrix(txns, monthly) {
+    if (!monthly.length) return null;
+    var months = monthly.map(function (r) { return r.month; });
+    var per = A.categoryByMonth(txns);
+    var top = A.byCategory(txns).slice(0, LIMITS.matrixCategories);
+    return {
+      months: months,
+      rows: top.map(function (c) {
+        return {
+          category: c.category,
+          // 거래가 없는 달은 0이다 — '없음' 이 아니라 '안 썼음' 이다
+          amounts: months.map(function (m) { return per[c.category][m] || 0; }),
+        };
+      }),
+    };
+  }
+
   function recurringBlock(txns) {
     var items = A.recurring(txns);
     var active = items.filter(function (r) { return r.active; });
     return {
-      // 살아 있는 항목만 1년치를 전망한다. 끝난 구독까지 ×12 하면
-      // 존재하지 않는 돈이 생긴다 (실측: 보고액의 66%가 허수였다).
+      // active 로 거르는 것이 함정이다 (끝난 구독까지 세면 실측 66%가 허수였다).
+      // 그래서 이 합계만 우리가 낸다. 연환산은 ×12 라 LLM 이 한다.
       activeMonthlyTotal: M.sum(active, function (r) { return r.monthlyMedian; }),
-      activeProjectedAnnual: M.sum(active, function (r) { return r.projectedAnnual; }),
-      observedTotal: M.sum(items, function (r) { return r.observedTotal; }),
       activeCount: active.length,
       inactiveCount: items.length - active.length,
-      items: items.slice(0, LIMITS.recurring),
+      // ⚠️ label 이 실려야 한다. 금액이 일정하면 월세도 식비도 여기 잡히는데,
+      //    총액만 주면 "고정지출 전액 끊으면 15년 빨라져" 같은 답이 나온다
+      //    (실측 재현: 진짜 구독만이면 11개월. 179개월 차이).
+      items: items.slice(0, LIMITS.recurring).map(function (r) {
+        return {
+          label: r.label, months: r.months,
+          firstMonth: r.firstMonth, lastMonth: r.lastMonth,
+          monthlyMedian: r.monthlyMedian, observedTotal: r.observedTotal,
+          active: r.active,
+        };
+      }),
     };
   }
 
@@ -1027,128 +1284,104 @@ KM.aggregate = (function () {
       var v = M.bucketTotal(snap, b);
       if (v) buckets[b] = v;
     });
-    return {
+    var all = M.assets(snap).slice().sort(function (a, b) { return b.amount - a.amount; });
+    var head = all.slice(0, LIMITS.accounts);
+    var rest = all.slice(LIMITS.accounts);
+    var out = {
       netWorth: M.netWorth(snap),
-      totalAssets: M.totalAssets(snap),
       totalDebt: M.totalDebt(snap),
       buckets: buckets,
-      accounts: M.assets(snap)
-        .slice()
-        .sort(function (a, b) { return b.amount - a.amount; })
-        .slice(0, 15)
-        .map(function (h) {
-          return { bucket: h.bucket, group: h.group, name: h.name, amount: h.amount };
-        }),
+      accounts: head.map(function (h) {
+        return { bucket: h.bucket, name: h.name, amount: h.amount };
+      }),
     };
+    if (rest.length) {
+      out.otherAccountsCount = rest.length;
+      out.otherAccountsTotal = M.sum(rest, function (h) { return h.amount; });
+    }
+    return out;
   }
 
   function cashBlock(snap, avgExpense) {
+    // 비상금을 몇 개월치로 볼지는 고용 형태에 따라 다르다. 우리가 고를 값이 아니다.
+    // total 과 monthsOfExpense 만 주면 어떤 배수든 LLM 이 계산한다.
     var total = M.bucketTotal(snap, M.Bucket.CASH);
-    var buffer = avgExpense * 3;
     return {
       total: total,
       monthsOfExpense: avgExpense > 0 ? Math.round((total / avgExpense) * 10) / 10 : null,
-      emergencyBuffer3m: buffer,
-      aboveBuffer: total - buffer,
     };
   }
 
   /**
    * 투자.
    *
-   * ⚠️ 두 시트가 다르다. '투자성 자산'(재무현황)에는 CMA 처럼 원금 정보가
-   *    없는 계좌가 들어 있고, '투자현황'에는 없다. 한쪽 합계에 다른 쪽 이름을
-   *    붙이면 실측 130,385원이 조용히 증발한다.
-   *    → 수익률은 **원금이 있는 것만으로** 계산하고, 나머지는 따로 밝힌다.
+   * ⚠️ 두 시트가 다르다. '투자성 자산'(재무현황)에는 CMA 처럼 원금 정보가 없는
+   *    계좌가 있고 '투자현황'에는 없다. 한쪽 합계에 다른 쪽 이름을 붙이면
+   *    실측 130,385원이 조용히 증발한다. **그 분리가 이 블록의 값어치다** —
+   *    합계·수익률은 holdings 로 LLM 이 계산한다.
    */
   function investmentBlock(snap) {
     var priced = snap.investments.filter(function (i) { return i.principal > 0; });
-    var principal = M.sum(priced, function (i) { return i.principal; });
     var value = M.sum(priced, function (i) { return i.value; });
     var bucket = M.bucketTotal(snap, M.Bucket.INVESTMENT);
-    var listedUnpriced = M.sum(
-      snap.investments.filter(function (i) { return i.principal <= 0; }),
-      function (i) { return i.value; }
-    );
-
     return {
       bucketTotal: bucket,
-      withCostBasis: {
-        principal: principal,
-        value: value,
-        pnl: value - principal,
-        roi: principal > 0 ? Math.round(((value - principal) / principal) * 1000) / 1000 : null,
-        count: priced.length,
-      },
-      withoutCostBasis: {
-        value: bucket - value,
-        note: 'CMA·예수금 등 원금 정보가 없어 수익률 계산에서 제외된 금액',
-        listedCount: snap.investments.length - priced.length,
-      },
-      holdings: priced
-        .map(function (i) {
-          return {
-            name: i.name, broker: i.broker,
-            principal: i.principal, value: i.value,
-            pnl: i.value - i.principal,
-            roi: Math.round(M.roi(i) * 1000) / 1000,
-          };
-        })
-        .sort(function (a, b) { return a.roi - b.roi; }),
+      unpricedValue: bucket - value,
+      unpricedNote: 'CMA·예수금 등 원금 정보가 없어 수익률 계산에서 제외해야 하는 금액',
+      holdings: priced.map(function (i) {
+        return { name: i.name, broker: i.broker, principal: i.principal, value: i.value };
+      }).sort(function (a, b) {
+        return (a.value - a.principal) / a.principal - (b.value - b.principal) / b.principal;
+      }),
     };
   }
 
-  function quality(tb, flow, extract, material) {
+  function quality(tb, extract, material) {
     var flags = [];
     if (Math.abs(tb.externalGross) >= material) {
       flags.push({
         code: 'unclassifiedExternalTransfers',
-        amountNet: tb.externalNet,
-        amountGross: tb.externalGross,
-        // 순액이 0이어도 총액은 클 수 있다. 700만 받고 700만 보내면
-        // 순액 0이지만 1,400만원이 수입에도 지출에도 안 잡힌 상태다.
-        note: '이체로 분류됐지만 본인 계좌가 아닌 곳과 오간 금액',
+        note: '이체로 분류됐지만 본인 계좌가 아닌 곳과 오간 금액. transfers.external 참조',
       });
     }
     if (Math.abs(tb.selfNet) >= material) {
       flags.push({
         code: 'selfTransferImbalance',
-        amount: tb.selfNet,
-        note: '본인 계좌 간 이체 순액. 0이어야 정상이며 어긋나면 미연동 계좌가 있다',
+        note: '본인 계좌 간 이체 순액이 0이 아니다. 연동 안 된 계좌가 있다',
       });
     }
     if (tb.selfMatchedByMask > 0) {
       flags.push({
         code: 'ownerMatchedByMaskedName',
-        count: tb.selfMatchedByMask,
-        note: '가려진 이름으로 본인 판정된 건. 동명이인이면 본인/타인 구분이 뒤집힌다',
+        note: '가려진 이름으로 본인 판정된 건이 있다. 동명이인이면 본인/타인 구분이 뒤집힌다',
       });
     }
     if (extract.foreign && extract.foreign.length) {
-      flags.push({
-        code: 'foreignCurrencyExcluded',
-        count: extract.foreign.length,
-        note: '원화가 아닌 거래는 합계에서 제외했다',
-      });
+      flags.push({ code: 'foreignCurrencyExcluded', count: extract.foreign.length,
+                   note: '원화가 아닌 거래는 합계에서 제외했다' });
     }
     if (!extract.snapshot) {
       flags.push({ code: 'noBalanceSheet', note: '자산 현황이 없어 잔고 지표를 낼 수 없다' });
     }
-    return { material: material, flags: flags };
+    return { material: material, materialNote: '지출의 5%. 이 미만은 보고하지 않았다', flags: flags };
   }
 
-  /** 필드의 뜻만 적는다. 결론은 적지 않는다 — 그건 읽는 쪽 몫이다. */
+  /** 필드의 뜻과 계산 규약만 적는다. 결론은 적지 않는다. */
   var HINTS = {
     signs: '금액은 내 지갑 기준이다. 들어오면 +, 나가면 −. expense 합계는 이미 부호를 뒤집고 환불을 차감한 순액이다.',
     transfers: '이체는 수입에도 지출에도 포함되지 않는다. 본인 계좌 간 이동이므로 self.net 은 0에 가까워야 한다.',
-    numbers: '이 파일의 숫자는 계산이 끝난 값이다. 다시 계산하지 말고, 여기 없는 수치는 만들지 마라.',
+    pace: 'pace.monthly = (수입 − 지출 + 남과 오간 이체 순액) ÷ 관측개월. 본인 계좌 간 이체 순액은 더하지 않는다 — 새로 생긴 돈이 아니다. 이 값을 직접 다시 유도하지 마라.',
+    derived: '합계·차액·비율·연환산은 여기 있는 숫자로 계산해 써라. 다만 pace 와 avgMonthlyExpense 는 이미 보정된 값이니 그대로 쓴다.',
+    truncation: 'otherTotal·otherAccountsTotal·external.other 는 목록에서 잘려나간 나머지다. 합계를 검산할 때 같이 더해라.',
+    recurring: 'recurring 은 금액이 일정한 모든 지출을 잡는다 — 월세·식비도 들어간다. items 의 label 을 보고 구독과 생활비를 구분해라.',
+    goals: '유저가 목표를 말하지 않았다면 5천만원·1억 같은 금액을 예시로 먼저 제시해 보라. 목표 금액을 정하는 건 유저와 너의 일이고, 정해지면 profile.goals 에 적어 두면 다음에도 이어진다.',
     scope: '이 도구는 사실·계산·비교까지만 한다. 상품 추천이나 매매 판단은 하지 않는다.',
     currency: 'KRW. 원 단위 정수.',
   };
 
   /**
-   * 이전 산출물과의 차이. **대화 한 세션은 이걸 알 수 없다** —
-   * 히스토리를 가진 우리만 낼 수 있는 값이라 굳이 계산해 싣는다.
+   * 이전 산출물과의 차이. 대화 한 세션은 지난 스냅샷을 볼 수 없고,
+   * **뱅샐은 최근 1년치만 주므로 우리가 안 쌓으면 영구히 사라진다.**
    */
   function delta(current, previous) {
     if (!previous) return null;
@@ -1162,9 +1395,9 @@ KM.aggregate = (function () {
     }
     if (current.recurring && previous.recurring) {
       var was = {};
-      previous.recurring.items.forEach(function (r) { was[r.key] = true; });
+      previous.recurring.items.forEach(function (r) { was[r.label] = true; });
       d.newRecurring = current.recurring.items
-        .filter(function (r) { return r.active && !was[r.key]; })
+        .filter(function (r) { return r.active && !was[r.label]; })
         .map(function (r) { return { label: r.label, monthlyMedian: r.monthlyMedian }; });
     }
     return d;

@@ -2,7 +2,7 @@
  * 집계 — 산출물이 실어 나를 숫자를 만드는 계층.
  *
  * 여기서 판단은 하지 않는다. "897만원이 문제다" 는 LLM 이 말하고,
- * 우리는 "이체를 본인/타인으로 갈랐더니 타인 쪽 순액이 8,967,889" 를 만든다.
+ * 우리는 "이체를 본인/타인으로 갈랐더니 타인 쪽 순액이 8,917,889" 를 만든다.
  *
  * ━━ 이 파일의 존재 이유 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  *
@@ -276,13 +276,7 @@ KM.analyze = (function () {
     var allMonths = monthRange(rows[0].month, rows[rows.length - 1].month);
     if (allMonths.length < minMonths) return [];
 
-    var cats = {};
-    for (var i = 0; i < txns.length; i++) {
-      var t = txns[i];
-      if (t.kind !== M.Kind.EXPENSE) continue;
-      if (!cats[t.major]) cats[t.major] = {};
-      cats[t.major][M.month(t)] = (cats[t.major][M.month(t)] || 0) + M.outflow(t);
-    }
+    var cats = categoryByMonth(txns);
 
     var out = [];
     Object.keys(cats).forEach(function (cat) {
@@ -326,6 +320,79 @@ KM.analyze = (function () {
       .sort(function (a, b) { return b.amount - a.amount; });
   }
 
+  /** 대분류 → { 월: 지출 순액 }. 급증 판정과 월별 추이가 같이 쓴다. */
+  function categoryByMonth(txns) {
+    var acc = {};
+    for (var i = 0; i < txns.length; i++) {
+      var t = txns[i];
+      if (t.kind !== M.Kind.EXPENSE) continue;
+      if (!acc[t.major]) acc[t.major] = {};
+      acc[t.major][M.month(t)] = (acc[t.major][M.month(t)] || 0) + M.outflow(t);
+    }
+    return acc;
+  }
+
+  /**
+   * 가맹점별 지출.
+   *
+   * 카테고리 합계만으로는 "온라인쇼핑 845만원"에서 멈춘다. 무엇을 샀는지는
+   * 이 수준까지 내려와야 보이고, 원본 거래 없이는 재구성할 수 없다.
+   */
+  function byMerchant(txns) {
+    var acc = {};
+    for (var i = 0; i < txns.length; i++) {
+      var t = txns[i];
+      if (t.kind !== M.Kind.EXPENSE || !t.desc) continue;
+      if (!acc[t.desc]) acc[t.desc] = { merchant: t.desc, category: t.major, amount: 0, count: 0 };
+      acc[t.desc].amount += M.outflow(t);
+      acc[t.desc].count++;
+    }
+    return Object.keys(acc)
+      .map(function (k) { return acc[k]; })
+      .filter(function (m) { return m.amount > 0; })
+      .sort(function (a, b) { return b.amount - a.amount; });
+  }
+
+  /**
+   * 월 순현금흐름 — **이 파일에서 가장 틀리기 쉬운 값**.
+   *
+   * 남은 필드로 만들 수 있는 그럴듯한 공식이 여섯 개인데 그중 넷이 부호를
+   * 뒤집는다 (실측). 정답은 하나뿐이다:
+   *
+   *   수입 − 지출 + **남과 오간 이체 순액**
+   *
+   * 이체를 통째로 빼면 −1,136만원이 나오는데 순자산 1,539만원·부채 0과
+   * 앞뒤가 안 맞는다. 통째로 더하면 연동 안 된 내 계좌의 돈을 새 돈으로 센다.
+   * **본인 명의 이체 순액은 더하지 않는다** — 순자산을 늘리는 돈이 아니다.
+   *
+   * 이 한 줄이 우리가 파는 것이다. 산수가 아니라 어떤 식을 쓸지에 대한 판단.
+   */
+  function pace(txns, owner) {
+    var t = totals(txns);
+    var tb = transferBalance(txns, owner);
+    var rows = monthlyTotals(txns);
+    if (!rows.length) return null;
+
+    var days = [];
+    for (var i = 0; i < txns.length; i++) {
+      if (txns[i].kind !== M.Kind.TRANSFER) days.push(txns[i].day);
+    }
+    days.sort();
+    var months = dayDiff(days[0], days[days.length - 1]) / DAYS_PER_MONTH;
+    if (months < 1) months = 1;
+
+    var net = t.income - t.expense + tb.externalNet;
+    var spikeExcess = spikes(txns).reduce(function (s, x) { return s + x.excess; }, 0);
+
+    return {
+      monthly: Math.round(net / months),
+      // 급증을 일회성으로 보면 부호가 뒤집힐 수 있다 (실측 −20만 → +6만).
+      // 어느 쪽인지는 데이터가 못 정한다. 그래서 둘 다 싣는다.
+      monthlyExSpikes: spikeExcess > 0 ? Math.round((net + spikeExcess) / months) : null,
+      observedMonths: Math.round(months * 10) / 10,
+    };
+  }
+
   function refunds(txns) {
     var items = txns.filter(M.isRefund);
     return { count: items.length, total: M.sum(items, function (t) { return t.amount; }) };
@@ -335,7 +402,8 @@ KM.analyze = (function () {
     median: median, monthIndex: monthIndex, monthRange: monthRange, dayDiff: dayDiff,
     monthlyTotals: monthlyTotals, totals: totals, avgMonthlyExpense: avgMonthlyExpense,
     transferBalance: transferBalance, recurring: recurring, spikes: spikes,
-    byCategory: byCategory, refunds: refunds,
+    byCategory: byCategory, categoryByMonth: categoryByMonth,
+    byMerchant: byMerchant, pace: pace, refunds: refunds,
   };
 })();
 

@@ -19,7 +19,7 @@ const ROOT = path.join(__dirname, '..');
 /** core 를 한 번만 로드해서 KM 을 돌려준다. */
 function loadCore() {
   if (!globalThis.KM || !globalThis.KM.aggregate) {
-    ['model', 'layout', 'analyze', 'parse', 'aggregate'].forEach((m) => {
+    ['model', 'layout', 'analyze', 'parse', 'profile', 'aggregate'].forEach((m) => {
       require(path.join(ROOT, 'core', m + '.js'));
     });
   }

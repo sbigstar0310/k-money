@@ -187,8 +187,12 @@ function process_(opts) {
     });
 
     // 4) 집계 — node 에서 검증한 그 코드
+    // profile.json 은 LLM 이 대화로 채운다. 없어도 정상 동작한다.
     var extract = KM.parse.extract(sheets);
-    facts = KM.aggregate.build(extract, { asOf: stamp });
+    facts = KM.aggregate.build(extract, {
+      asOf: stamp,
+      profile: readJson_(folder, 'profile.json'),
+    });
     facts.generatedAt = new Date().toISOString();
     facts.sourceMessageId = found.id;
 

@@ -180,13 +180,12 @@ test('끝난 구독은 1년치를 전망하지 않는다 (실측 허수 209만�
   const alive = f.recurring.items.find((r) => r.label === '살아있는구독');
   const dead = f.recurring.items.find((r) => r.label === '해지한구독');
   assert.strictEqual(alive.active, true);
-  assert.strictEqual(alive.projectedAnnual, 240000);
   assert.strictEqual(dead.active, false);
-  assert.strictEqual(dead.projectedAnnual, null, '해지한 구독의 1년치는 존재하지 않는 돈이다');
-
-  assert.strictEqual(f.recurring.activeProjectedAnnual, 240000,
-    '전망에 죽은 구독이 섞이면 20만 × 12 + 5만 × 12 = 84만이 된다');
-  assert.strictEqual(f.recurring.observedTotal, 60000 + 200000, '실제로 나간 돈은 따로 낸다');
+  // 연환산(×12)은 LLM 이 한다. 우리가 하는 건 '무엇이 아직 살아 있나' 판정뿐이고,
+  // 그게 함정이었다 — 끝난 구독까지 세면 실측 66%가 허수였다.
+  assert.strictEqual(f.recurring.activeMonthlyTotal, 20000,
+    '살아 있는 것만 합산한다. 죽은 구독이 섞이면 70,000 이 된다');
+  assert.strictEqual(alive.observedTotal, 60000, '실제로 나간 돈은 따로 낸다');
 });
 
 
@@ -230,9 +229,8 @@ test('합계 셀은 수식이라 읽지 않고 직접 더한다', () => {
     ],
     debts: [{ group: '장기대출', name: '학자금', amount: 300000 }],
   });
-  assert.strictEqual(f.balance.totalAssets, 3500000);
   assert.strictEqual(f.balance.totalDebt, 300000);
-  assert.strictEqual(f.balance.netWorth, 3200000);
+  assert.strictEqual(f.balance.netWorth, 3200000, '수식 셀을 읽었다면 0 이나 NaN 이 나온다');
 });
 
 test('그룹명은 첫 행에만 있으므로 아래로 이어받는다', () => {
@@ -255,10 +253,11 @@ test('원금 없는 계좌가 수익률에 섞이면 안 된다 (합성에서 +4
       { name: 'A주식', principal: 100000, value: 20000 },
     ],
   });
-  assert.strictEqual(f.investments.withCostBasis.principal, 100000);
-  assert.strictEqual(f.investments.withCostBasis.value, 20000);
-  assert.strictEqual(f.investments.withCostBasis.roi, -0.8, 'CMA 를 섞으면 +420% 가 된다');
-  assert.strictEqual(f.investments.withoutCostBasis.value, 500000, '증발시키지 않고 따로 밝힌다');
+  // 수익률은 LLM 이 holdings 로 계산한다. 우리가 하는 건 **원금 있는 것과
+  // 없는 것을 가르는 일**이고, 그게 이 블록의 유일한 값어치다.
+  assert.strictEqual(f.investments.holdings.length, 1, 'CMA 는 수익률 계산에서 빠져야 한다');
+  assert.strictEqual(f.investments.holdings[0].principal, 100000);
+  assert.strictEqual(f.investments.unpricedValue, 500000, '증발시키지 않고 따로 밝힌다');
   assert.strictEqual(f.investments.bucketTotal, 520000);
 });
 
@@ -269,7 +268,7 @@ test('투자현황에 없는 투자성 자산도 총액에 남는다 (실측 CMA
     investments: [{ name: '주식A', principal: 100000, value: 80000 }],
   });
   assert.strictEqual(f.investments.bucketTotal, 210385);
-  assert.strictEqual(f.investments.withoutCostBasis.value, 130385);
+  assert.strictEqual(f.investments.unpricedValue, 130385);
 });
 
 
@@ -282,8 +281,7 @@ test('미분류 이체가 크면 저축률 키 자체를 만들지 않는다', (
     H.transfer('2025-01-10', 5000000, '누군가'),
   ]);
   assert.strictEqual(f.flow.savingsRate, undefined, 'null 이 아니라 키가 없어야 인용될 수 없다');
-  assert.ok(f.flow.savingsRateOmitted);
-  assert.strictEqual(f.flow.savingsRateOmitted.reason, 'unclassifiedTransfers');
+  assert.strictEqual(f.flow.savingsRateOmitted, 'unclassifiedTransfers');
 });
 
 test('데이터가 깨끗하면 저축률을 낸다', () => {
@@ -434,4 +432,85 @@ test('소스에 NUL 바이트가 없다 — 두 번 당한 함정이다', () => 
       });
   });
   assert.deepStrictEqual(offenders, []);
+});
+
+
+// ── 경계 원칙 회귀 ─────────────────────────────────────────────────
+//
+// 2026-08-08 적대적 검토에서 나온 것들. "우리가 파는 건 산수가 아니라
+// 어떤 식을 쓸지에 대한 판단" 이라는 원칙이 코드에서 지켜지는지 본다.
+
+test('pace 는 남과 오간 이체만 더한다 — 여섯 공식 중 하나만 맞다', () => {
+  // 실측: pace 를 지우면 LLM 이 만들 수 있는 공식 6개 중 4개가 부호를 뒤집었다.
+  const f = build([
+    H.income('2025-01-01', 1000000),
+    H.expense('2025-01-15', 3000000),
+    H.transfer('2025-01-10', 2500000, '회사'),     // 남 → 더한다
+    H.transfer('2025-01-20', 400000, '성대규'),    // 본인 → 안 더한다
+  ], { assets: [{ group: '자유입출금 자산', name: '통장', amount: 5000000 }] });
+
+  // (1,000,000 − 3,000,000 + 2,500,000) = +500,000. 관측 1개월 미만은 1개월로 본다.
+  assert.strictEqual(f.pace.monthly, 500000);
+  assert.notStrictEqual(f.pace.monthly, -2000000, '이체를 통째로 빼면 부호가 뒤집힌다');
+  assert.notStrictEqual(f.pace.monthly, 900000, '본인 이체까지 더하면 없는 돈이 생긴다');
+});
+
+test('잘라낸 목록의 나머지를 밝힌다 — 안 밝히면 검산이 안 맞는다', () => {
+  const txns = [];
+  for (let i = 0; i < 20; i++) {
+    txns.push(H.expense('2025-0' + ((i % 9) + 1) + '-10', 10000 * (i + 1),
+      { major: '분류' + i, desc: '가맹점' + i }));
+  }
+  const f = build(txns);
+  const shown = f.categories.items.reduce((s, c) => s + c.amount, 0);
+  assert.ok(f.categories.otherTotal > 0, '20개 중 12개만 실었으면 나머지를 밝혀야 한다');
+  assert.strictEqual(shown + f.categories.otherTotal, f.flow.expense);
+});
+
+test('양끝의 잘린 달을 표시한다 — 8일치를 한 달로 읽으면 안 된다', () => {
+  const f = build([
+    H.expense('2025-01-15', 500000),
+    H.expense('2025-03-08', 100000),
+  ]);
+  assert.strictEqual(f.flow.monthly[0].partial, true, '1월 15일 시작이면 1월은 잘린 달이다');
+  const last = f.flow.monthly[f.flow.monthly.length - 1];
+  assert.strictEqual(last.partial, true);
+  assert.strictEqual(last.daysObserved, 8, '3월은 8일치뿐이다');
+});
+
+test('카테고리×월 교차에서 안 쓴 달은 0으로 채운다', () => {
+  const txns = [];
+  for (let m = 1; m <= 6; m++) {
+    txns.push(H.expense('2025-0' + m + '-10', 300000, { major: '식비' }));
+  }
+  txns.push(H.expense('2025-03-20', 900000, { major: '온라인쇼핑' }));
+
+  const f = build(txns);
+  const row = f.categoryMonthly.rows.find((r) => r.category === '온라인쇼핑');
+  assert.strictEqual(row.amounts.length, f.categoryMonthly.months.length);
+  assert.strictEqual(row.amounts[2], 900000);
+  assert.strictEqual(row.amounts[0], 0, "안 쓴 달은 '없음' 이 아니라 0 이다");
+});
+
+test('우리가 고른 상수로 결론을 내지 않는다 — 삭제된 것들이 돌아오지 않게', () => {
+  const f = build([H.expense('2025-01-01', 1000)], {
+    assets: [{ group: '자유입출금 자산', name: '통장', amount: 5000000 }],
+  });
+  // 전부 "우리가 임의로 고른 값" 이라 뺐다. 재료는 남아 있고 배수는 LLM 이 정한다.
+  assert.strictEqual(f.goal, undefined, 'goalTable·levers·suggestedHorizons');
+  assert.strictEqual(f.cash.emergencyBuffer3m, undefined, '비상금 몇 개월인지는 우리가 못 정한다');
+  assert.strictEqual(f.cash.aboveBuffer, undefined);
+  assert.ok(f.cash.total > 0 && f.cash.monthsOfExpense !== undefined, '재료는 남긴다');
+});
+
+test('고정지출에 무엇이 들었는지 밝힌다 — 총액만 주면 월세도 끊으라는 말이 된다', () => {
+  const txns = [];
+  for (let m = 1; m <= 6; m++) {
+    txns.push(H.expense('2025-0' + m + '-01', 500000, { desc: '월세' }));
+    txns.push(H.expense('2025-0' + m + '-10', 9900, { desc: '스트리밍' }));
+  }
+  const f = build(txns);
+  const labels = f.recurring.items.map((r) => r.label);
+  assert.ok(labels.includes('월세') && labels.includes('스트리밍'),
+    '실측: label 이 없으면 "고정지출 전액 끊으면 15년 빨라져" 가 나온다 (실제 11개월)');
 });
