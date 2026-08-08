@@ -411,8 +411,8 @@ test('산출물 크기가 거래 건수를 따라가지 않는다', () => {
     txns.push(H.expense('2025-' + String((i % 12) + 1).padStart(2, '0') + '-10', 1000 + i,
       { desc: '가맹점' + i }));
   }
-  const size = JSON.stringify(build(txns), null, 2).length;
-  assert.ok(size < 20000, '거래 3,000건인데 산출물이 ' + size + ' bytes');
+  const size = Buffer.byteLength(JSON.stringify(build(txns), null, 2), 'utf8');
+  assert.ok(size < 22000, '거래 3,000건인데 산출물이 ' + size + ' bytes');
 });
 
 

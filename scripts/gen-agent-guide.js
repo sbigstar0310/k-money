@@ -32,7 +32,9 @@ if (!text.endsWith('\n')) {
 }
 
 // 마지막 개행은 join 뒤에 붙이므로 배열에 넣지 않는다.
-const lines = text.slice(0, -1).split('\n');
+// ⚠️ CRLF 로 저장되면 모든 원소 끝에 \r 이 박혀 드라이브로 나간다. 그런데
+//    등가성 테스트는 **양쪽 다 \r 이라 통과한다** — 조용히 새는 종류다.
+const lines = text.slice(0, -1).split('\n').map((l) => l.replace(/\r$/, ''));
 const body = lines
   .map((l) => '      ' + JSON.stringify(l).replace(/'/g, "\\u0027") + ',')
   // Apps Script 소스는 작은따옴표를 쓰지만, JSON.stringify 가 주는 큰따옴표
@@ -44,6 +46,15 @@ const from = gs.indexOf(BEGIN);
 const to = gs.indexOf(END, from);
 if (from === -1 || to === -1) {
   throw new Error('app.gs 에서 AGENT_GUIDE 블록을 못 찾았다');
+}
+
+// ⚠️ **엉뚱한 끝을 잡으면 조용히 코드를 삼킨다.** indexOf 는 "그다음 첫
+//    END" 를 잡을 뿐이라, 누가 배열 종결부를 손으로 바꾸거나 비슷한 배열이
+//    하나 더 생기면 그 사이가 통째로 지워지는데 **아무 에러도 안 난다.**
+//    지금 지우려는 구간이 정말 문자열 배열뿐인지 확인한다.
+const doomed = gs.slice(from + BEGIN.length, to);
+if (/^\s*(function|var|if|for|return)\b/m.test(doomed)) {
+  throw new Error('AGENT_GUIDE 끝을 잘못 잡았다 — 지우려는 구간에 코드가 있다');
 }
 
 const next = gs.slice(0, from + BEGIN.length) + body + '\n' + gs.slice(to);

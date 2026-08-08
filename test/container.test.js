@@ -368,7 +368,6 @@ test('산출물이 안내문으로 가는 길을 맨 앞에서 알려준다', ()
   //    그리고 그 문장은 "알게 된 것은 메모리/ 에 **있다**" 였다. 읽을 곳을
   //    가리키는 말이라 **폴더를 열어 비어 있으면 이행이 끝난다.** 실제로
   //    그렇게 끝났다. 그래서 지금은 쓰기가 주절이고 자리도 맨 앞이다.
-  const KM = require('./lib/helpers').loadCore();
   const sample = JSON.parse(
     fs.readFileSync(path.join(ROOT, 'docs', 'sample-latest.json'), 'utf8'));
 
@@ -382,12 +381,26 @@ test('산출물이 안내문으로 가는 길을 맨 앞에서 알려준다', ()
   // 시한이 없으면 "나중에" 가 되고, 대화는 끝난다.
   assert.match(sample.readFirst, /답을 마치기 전에/, 'readFirst 에 시한이 없다');
 
+  // ⚠️ **조건절로 시작하면 안 된다.** 한 번 이렇게 썼다가 리뷰에서 잡혔다:
+  //    "새로 알게 된 것이 **있으면** ... 적어라. ... AGENT.md 를 읽어라."
+  //    "이번 달 소비 어땠어" 처럼 조건이 거짓인 대화에서는 **문장 전체가
+  //    해당 없음으로 버려진다** — 뒤에 붙은 "읽어라" 까지 같이. 그러면
+  //    관측된 실패가 글자 그대로 재현된다. 명령이 먼저, 조건은 그 안에.
+  const cond = sample.readFirst.search(/[면]\s/);
+  const guide = sample.readFirst.indexOf(agentNameOf());
+  assert.ok(cond === -1 || guide < cond,
+    'readFirst 가 조건절 뒤에 안내문 읽기를 두고 있다 — 조건이 거짓이면 통째로 버려진다');
+
   // 안내문 이름이 두 파일에 걸쳐 있다 — core 가 문장에 박고 app.gs 가 만든다.
-  const app = fs.readFileSync(path.join(ROOT, 'appsscript', 'app.gs'), 'utf8');
-  const agentName = /agentName:\s*'([^']+)'/.exec(app)[1];
-  assert.ok(sample.readFirst.indexOf(agentName) !== -1,
+  assert.ok(sample.readFirst.indexOf(agentNameOf()) !== -1,
     'readFirst 가 가리키는 이름과 app.gs 가 만드는 파일 이름이 다르다');
 });
+
+/** app.gs 가 실제로 만드는 안내문 파일 이름. */
+function agentNameOf() {
+  const app = fs.readFileSync(path.join(ROOT, 'appsscript', 'app.gs'), 'utf8');
+  return /agentName:\s*'([^']+)'/.exec(app)[1];
+}
 
 test('샘플 안에서 잘라낸 값이 전부 검산된다', () => {
   // 유저가 설치 전에 보는 파일이다. 여기서 합이 안 맞으면

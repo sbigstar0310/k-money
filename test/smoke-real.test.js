@@ -49,20 +49,23 @@ test('실데이터가 끝까지 돈다', opts, () => {
 });
 
 test('실데이터 산출물이 커지지 않는다', opts, () => {
-  // ⚠️ **드라이브에 실제로 쓰이는 모양 그대로 잰다.** 예전엔 압축본을 쟀는데
-  //    app.gs 의 persist 는 `JSON.stringify(facts, null, 2)` 를 쓴다. 배율이
-  //    1.73배라 압축 10,072 bytes 가 실제로는 17,391 bytes 로 나간다 —
-  //    **재는 숫자와 나가는 숫자가 달랐다.** 필드를 하나 늘려 압축이 한도
-  //    안에 남아 있어도 실제 파일은 훌쩍 넘을 수 있었다.
+  // ⚠️ **드라이브에 실제로 쓰이는 모양 그대로, 실제 단위로 잰다.**
+  //
+  //    두 번 어긋났다. 처음엔 압축본을 쟀는데 persist 는
+  //    `JSON.stringify(facts, null, 2)` 를 쓴다 (1.73배). 고치고 나서도
+  //    `.length` 를 그대로 뒀는데 그건 **UTF-16 코드유닛**이다 — 한국어라
+  //    바이트는 1.14배다. 17,569 자가 드라이브에서는 **20,042 bytes** 다.
+  //    "2,400 여유 있네" 하고 필드를 더 넣게 되는 종류의 거짓말이다.
   //
   //    '19KB 를 넘으면 커넥터가 빈 문자열로 읽는다' 는 옛 기록은 **틀렸다**
   //    (DECISIONS §4 — 갓 만든 파일이 잠시 비어 보인 것이었다). 그러니
   //    이 문턱은 절벽이 아니라 **증가 감지기**다. 목록 절단이 풀리거나
   //    0채움에 상한이 없어지면 여기가 먼저 빨개진다 (실제로 그렇게 잡혔다).
+  //    지금 실측 20,042 에서 10% 를 여유로 둔다.
   const sheets = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
   const facts = KM.aggregate.build(KM.parse.extract(sheets));
-  const size = JSON.stringify(facts, null, 2).length;
-  assert.ok(size < 20000, '산출물 ' + size + ' bytes — 무엇이 늘었는지 보라');
+  const bytes = Buffer.byteLength(JSON.stringify(facts, null, 2), 'utf8');
+  assert.ok(bytes < 22000, '산출물 ' + bytes + ' bytes — 무엇이 늘었는지 보라');
 });
 
 test('실데이터에서 이체 분해가 총량을 보존한다', opts, () => {

@@ -49,6 +49,9 @@ function fakeBlob(name, content) {
     getName: () => n,
     setName(x) { n = x; return this; },
     getDataAsString: () => content,
+    // Apps Script 의 Blob 은 바이트로 준다. `.length` 는 UTF-16 코드유닛이라
+    // 한국어에서 실제 크기와 1.14배 어긋난다 — 여기서도 진짜 바이트를 센다.
+    getBytes: () => Buffer.from(String(content), 'utf8'),
     getBlob() { return this; },
     copyBlob() { return fakeBlob(n, content); },
     _content: () => content,
@@ -666,10 +669,18 @@ test('AGENT.md 가 쓰기 규칙과 경계를 담는다', () => {
   assert.match(A.AGENT_GUIDE, /고칠 수도 지울 수도 없습니다/,
     'AI 가 자기 제약을 알아야 갱신 절차를 따른다');
   assert.match(A.AGENT_GUIDE, /먼저 읽으세요/, '읽고 나서 새로 쓰라고 해야 한다');
-  assert.match(A.AGENT_GUIDE, /지금 참인 것만/, '이력을 쌓으면 모순이 남는다');
+  assert.match(A.AGENT_GUIDE, /지금 참인 것/, '이력을 쌓으면 모순이 남는다');
+  // 시행일이 미래인 변경(9월부터 월 180만)을 '지금 참인 것만' 으로 막으면
+  // **곧 틀릴 값**을 적게 된다. 실측 리뷰에서 나온 충돌이다.
+  assert.match(A.AGENT_GUIDE, /날짜가 정해진 예정/, '미래 시점 사실을 적을 길이 없다');
+  assert.match(A.AGENT_GUIDE, /같은 날 같은 주제를 \*\*두 번\*\*/,
+    '하루에 두 번 갱신하면 파일 이름이 겹치는데 그 경우가 안 적혀 있다');
   assert.match(A.AGENT_GUIDE, /새 이름을 지어내지 마세요/,
     '주제 이름이 흔들리면 중복 주제가 된다');
   assert.match(A.AGENT_GUIDE, /추천하지 마세요/, '상품 추천 금지가 빠졌다');
+  // ⚠️ 금액만 적어도 **항목 이름에서 진단이 복원된다.**
+  //    `정신건강의학과 월 5만원` 은 금액만 적은 게 아니다.
+  assert.match(A.AGENT_GUIDE, /라벨도 일반화하세요/, '라벨로 새는 길이 열려 있다');
   assert.match(A.AGENT_GUIDE, /period/, '기간을 넘겨짚지 말라고 해야 한다');
   // 우리가 쓰는 이름과 안내가 어긋나면 AI 가 못 찾는다.
   assert.ok(A.AGENT_GUIDE.indexOf(A.CFG.latestName) !== -1);
@@ -677,15 +688,36 @@ test('AGENT.md 가 쓰기 규칙과 경계를 담는다', () => {
   assert.ok(A.AGENT_GUIDE.indexOf(A.CFG.statusName) !== -1);
 });
 
-test('AGENT.md 가 AI 쪽 저장 방침과의 충돌을 먼저 끊는다', () => {
-  // ⚠️ **실측에서 이것 때문에 한 줄도 안 적혔다.** AI 가 "재무 정보는
-  //    저장하지 않는다" 는 자기 서비스 방침을 유저의 드라이브 폴더에까지
-  //    적용했다. 그 폴더는 유저 파일이지 AI 의 저장소가 아니다 —
-  //    안내문이 먼저 말해 주지 않으면 매번 같은 자리에서 멎는다.
+test('AGENT.md 가 사실만 대고, 남의 방침을 무효화하려 들지 않는다', () => {
+  // ⚠️ **여기서 한 번 자책골을 넣었다.** AI 가 "재무 정보는 저장하지 않는다"
+  //    는 자기 방침을 유저 드라이브 폴더에까지 적용해서 한 줄도 안 적었다.
+  //    그래서 안내문에 *"당신 쪽 방침은 여기에 적용되지 않습니다"* 라고
+  //    굵게 적었는데 — 리뷰에서 **그 문장이 프롬프트 인젝션으로 읽힌다**는
+  //    답이 왔다. 문서 전체가 적대적 콘텐츠로 재분류되면서, 뚫으려던 쓰기가
+  //    더 막힌다.
+  //
+  //    우리가 남의 안전 판단을 대신 내릴 자리가 아니다. **사실만 대고
+  //    결론은 읽는 쪽에 맡긴다** — 그게 맞기도 하고 실제로 더 잘 통한다.
   const A = loadApp();
-  assert.match(A.AGENT_GUIDE, /당신의 메모리가 아닙니다/, '충돌을 안 끊고 있다');
-  assert.match(A.AGENT_GUIDE, /방침은 여기에 적용되지\s*\n?\s*않습니다/,
-    'AI 쪽 방침이 여기 적용 안 된다고 명시해야 한다');
+  assert.match(A.AGENT_GUIDE, /당신의 메모리가 아닙니다/, '구분을 안 해주고 있다');
+  assert.match(A.AGENT_GUIDE, /사용자 소유 드라이브/, '누구 파일인지가 없다');
+  assert.match(A.AGENT_GUIDE, /당신이 판단하세요/, '결론을 대신 내려주고 있다');
+
+  // 남의 규칙을 무효라고 선언하는 모양이면 안 된다.
+  assert.doesNotMatch(A.AGENT_GUIDE, /적용되지\s*않습니다/,
+    '남의 방침을 무효화하는 문장이 다시 들어왔다');
+  // "이미 민감한 게 있으니 하나 더는 괜찮다" 는 성립하지 않는 논증이다.
+  assert.doesNotMatch(A.AGENT_GUIDE, /민감할 리 없/, '부실한 논증이 다시 들어왔다');
+});
+
+test('AGENT.md 가 매번 허락을 묻지 말라고 한다', () => {
+  // ⚠️ 리뷰 시뮬레이션의 2순위 실패 원인이었다. 남의 클라우드에 파일을
+  //    만드는 건 기본값이 "물어보기" 라서, 답변 끝에 "적어둘까요?" 를 붙이고
+  //    사용자는 답 없이 대화를 끝낸다 — **파일 0개.**
+  const A = loadApp();
+  assert.match(A.AGENT_GUIDE, /허락을 매번 묻지 마세요/, '묻지 말라는 말이 없다');
+  assert.match(A.AGENT_GUIDE, /무엇을 적었는지 한 줄로 알려주세요/,
+    '묻지 않는 대신 알려주기라도 해야 한다');
 });
 
 test('AGENT.md 가 언제 쓰는지를 말하고, 브레이크가 액셀을 덮지 않는다', () => {
@@ -697,9 +729,18 @@ test('AGENT.md 가 언제 쓰는지를 말하고, 브레이크가 액셀을 덮�
   assert.match(A.AGENT_GUIDE, /지금 안 적으면 사라집니다/, '왜 지금인지가 빠졌다');
   assert.match(A.AGENT_GUIDE, /답을 마치기 전에/, '언제까지 적을지가 없다');
 
-  const brakes = (A.AGENT_GUIDE.match(/쓰지 마세요|적지 마세요|만들지 마세요|하지 마세요|지어내지 마세요/g) || []).length;
-  const gas = (A.AGENT_GUIDE.match(/적어 두세요|적으세요|새로 만드세요|만드세요|쓰세요|쓸 때입니다/g) || []).length;
-  assert.ok(gas >= brakes, '감속 ' + brakes + ' 문장 vs 가속 ' + gas + ' 문장 — 또 기울었다');
+  // ⚠️ 여기 한때 '쓰지 마세요' 와 '쓰세요' 문장 **개수**를 세는 단언이 있었다.
+  //    지우는 이유: **관계없는 안전 가드를 삭제하면 통과한다.** 정규식이 잡던
+  //    '하지 마세요' 넷 중 셋은 메모리와 무관한 투자 조언 금지(`사고팔라고
+  //    하지 마세요`)였고, 비율이 8:8 경계였다. 메모리 규칙을 하나만 더 써도
+  //    빨간불이 뜨고, 가장 쉬운 통과법은 **투자 가드를 지우는 것**이 된다.
+  //    산문 정규식 카운터가 그런 유인을 만들면 없느니만 못하다.
+  //
+  //    균형은 순서로 잰다. 쓰라는 절이 자제 규칙보다 **먼저** 나와야 한다 —
+  //    AI 는 위에서부터 읽고 아래쪽을 훑는다.
+  assert.ok(
+    A.AGENT_GUIDE.indexOf('### 언제 쓰나') < A.AGENT_GUIDE.indexOf('### 안 써도 되는 때'),
+    '자제 규칙이 쓰라는 절보다 위에 있다');
 });
 
 // ── 메모리 ────────────────────────────────────────────────────────

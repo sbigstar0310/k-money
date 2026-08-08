@@ -1,12 +1,12 @@
 {
   "name": "k-money",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "돈동생 — 집계 코어. node 와 Apps Script 양쪽에서 같은 코드가 돈다.",
   "private": true,
   "scripts": {
     "test": "node --test test/",
     "build": "node scripts/build-gs.js",
-    "check": "node scripts/build-gs.js && node --test test/",
+    "check": "node scripts/build-gs.js && node scripts/gen-agent-guide.js && node --test test/",
     "run:local": "node scripts/run-local.js",
     "version": "node scripts/stamp-version.js && node scripts/build-gs.js && git add VERSION README.md appsscript/core.gs appsscript/container.gs"
   },
