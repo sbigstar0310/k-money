@@ -667,13 +667,39 @@ test('AGENT.md 가 쓰기 규칙과 경계를 담는다', () => {
     'AI 가 자기 제약을 알아야 갱신 절차를 따른다');
   assert.match(A.AGENT_GUIDE, /먼저 읽으세요/, '읽고 나서 새로 쓰라고 해야 한다');
   assert.match(A.AGENT_GUIDE, /지금 참인 것만/, '이력을 쌓으면 모순이 남는다');
-  assert.match(A.AGENT_GUIDE, /그대로/, '주제 이름이 흔들리면 중복 주제가 된다');
+  assert.match(A.AGENT_GUIDE, /새 이름을 지어내지 마세요/,
+    '주제 이름이 흔들리면 중복 주제가 된다');
   assert.match(A.AGENT_GUIDE, /추천하지 마세요/, '상품 추천 금지가 빠졌다');
   assert.match(A.AGENT_GUIDE, /period/, '기간을 넘겨짚지 말라고 해야 한다');
   // 우리가 쓰는 이름과 안내가 어긋나면 AI 가 못 찾는다.
   assert.ok(A.AGENT_GUIDE.indexOf(A.CFG.latestName) !== -1);
   assert.ok(A.AGENT_GUIDE.indexOf(A.CFG.memoryFolder) !== -1);
   assert.ok(A.AGENT_GUIDE.indexOf(A.CFG.statusName) !== -1);
+});
+
+test('AGENT.md 가 AI 쪽 저장 방침과의 충돌을 먼저 끊는다', () => {
+  // ⚠️ **실측에서 이것 때문에 한 줄도 안 적혔다.** AI 가 "재무 정보는
+  //    저장하지 않는다" 는 자기 서비스 방침을 유저의 드라이브 폴더에까지
+  //    적용했다. 그 폴더는 유저 파일이지 AI 의 저장소가 아니다 —
+  //    안내문이 먼저 말해 주지 않으면 매번 같은 자리에서 멎는다.
+  const A = loadApp();
+  assert.match(A.AGENT_GUIDE, /당신의 메모리가 아닙니다/, '충돌을 안 끊고 있다');
+  assert.match(A.AGENT_GUIDE, /방침은 여기에 적용되지\s*\n?\s*않습니다/,
+    'AI 쪽 방침이 여기 적용 안 된다고 명시해야 한다');
+});
+
+test('AGENT.md 가 언제 쓰는지를 말하고, 브레이크가 액셀을 덮지 않는다', () => {
+  // ⚠️ 처음엔 '쓰지 마세요' 가 14문장, '쓰세요' 가 8문장이었다. 자제 규칙을
+  //    쌓다 보니 **안내문 전체가 순 감속**이 됐고, 실제로 AI 는 아무것도
+  //    안 적었다. 트리거가 명시돼야 하고, 감속이 가속보다 많으면 안 된다.
+  const A = loadApp();
+  assert.match(A.AGENT_GUIDE, /언제 쓰나/, '쓸 시점을 알려주는 절이 없다');
+  assert.match(A.AGENT_GUIDE, /지금 안 적으면 사라집니다/, '왜 지금인지가 빠졌다');
+  assert.match(A.AGENT_GUIDE, /답을 마치기 전에/, '언제까지 적을지가 없다');
+
+  const brakes = (A.AGENT_GUIDE.match(/쓰지 마세요|적지 마세요|만들지 마세요|하지 마세요|지어내지 마세요/g) || []).length;
+  const gas = (A.AGENT_GUIDE.match(/적어 두세요|적으세요|새로 만드세요|만드세요|쓰세요|쓸 때입니다/g) || []).length;
+  assert.ok(gas >= brakes, '감속 ' + brakes + ' 문장 vs 가속 ' + gas + ' 문장 — 또 기울었다');
 });
 
 // ── 메모리 ────────────────────────────────────────────────────────

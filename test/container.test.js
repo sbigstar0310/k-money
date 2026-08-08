@@ -360,6 +360,35 @@ test('샘플 산출물이 실제 스키마와 같고 커넥터 한도 안에 든
     'sample 이 낡았다 — node scripts/make-sample.js 를 돌려라');
 });
 
+test('산출물이 안내문으로 가는 길을 맨 앞에서 알려준다', () => {
+  // ⚠️ **실측에서 이 경로가 끊겨 있었다.** 지시가 `hints.goals` 안에 있었는데
+  //    그건 최상위 20개 중 마지막 키의, 힌트 10개 중 8번째다 — 17KB 파일의
+  //    맨 끝. AI 는 거기까지 안 갔고, 자기가 쓸 수 있다는 것도 몰랐다.
+  //
+  //    그리고 그 문장은 "알게 된 것은 메모리/ 에 **있다**" 였다. 읽을 곳을
+  //    가리키는 말이라 **폴더를 열어 비어 있으면 이행이 끝난다.** 실제로
+  //    그렇게 끝났다. 그래서 지금은 쓰기가 주절이고 자리도 맨 앞이다.
+  const KM = require('./lib/helpers').loadCore();
+  const sample = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'docs', 'sample-latest.json'), 'utf8'));
+
+  const keys = Object.keys(sample);
+  assert.ok(keys.indexOf('readFirst') >= 0 && keys.indexOf('readFirst') <= 2,
+    'readFirst 가 ' + (keys.indexOf('readFirst') + 1) + '번째다 — 맨 앞이어야 한다');
+
+  // 주절이 쓰기여야 한다. 읽기만 시키면 빈 폴더에서 끝난다.
+  assert.match(sample.readFirst, /적어라/, 'readFirst 가 쓰라고 하지 않는다');
+  assert.ok(sample.readFirst.indexOf('메모리/') !== -1);
+  // 시한이 없으면 "나중에" 가 되고, 대화는 끝난다.
+  assert.match(sample.readFirst, /답을 마치기 전에/, 'readFirst 에 시한이 없다');
+
+  // 안내문 이름이 두 파일에 걸쳐 있다 — core 가 문장에 박고 app.gs 가 만든다.
+  const app = fs.readFileSync(path.join(ROOT, 'appsscript', 'app.gs'), 'utf8');
+  const agentName = /agentName:\s*'([^']+)'/.exec(app)[1];
+  assert.ok(sample.readFirst.indexOf(agentName) !== -1,
+    'readFirst 가 가리키는 이름과 app.gs 가 만드는 파일 이름이 다르다');
+});
+
 test('샘플 안에서 잘라낸 값이 전부 검산된다', () => {
   // 유저가 설치 전에 보는 파일이다. 여기서 합이 안 맞으면
   // "내 데이터에 이상한 거 있어?" 에 LLM 이 오탐을 낸다.
