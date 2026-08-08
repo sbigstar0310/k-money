@@ -399,8 +399,8 @@ test('openById 를 쓰면서 currentonly 로 좁히지 않는다', () => {
 test('install.md 스코프 표가 매니페스트와 정확히 같다', () => {
   // 유저에게 "정확히 말씀드릴게요" 라고 해놓은 표다. 어긋나면 그 문장이 거짓말이 된다.
   const md = fs.readFileSync(path.join(ROOT, 'docs', 'install.md'), 'utf8');
-  const head = md.indexOf('| 스코프 | 실제로 할 수 있는 것 |');
-  assert.notEqual(head, -1, 'install.md 에서 스코프 표를 못 찾았다');
+  const head = md.indexOf('| 스코프 | 위 표의 |');
+  assert.notEqual(head, -1, 'install.md 에서 스코프 대조표를 못 찾았다');
   const table = md.slice(head, md.indexOf('\n\n', head));
   const rows = [...table.matchAll(/^\| `([a-z._]+)` \|/gm)].map((m) => m[1]);
   const short = (MANIFEST.oauthScopes || []).map((s) => s.replace(/^.*\/auth\//, ''));
@@ -417,6 +417,18 @@ test('install.md 의 비상 복구 안내가 배포 파일을 다 부른다', ()
   DEPLOYED.filter((f) => f !== 'container.gs').forEach((f) => {
     assert.ok(para.indexOf(f) !== -1, f + ' 이 복구 안내에 없다');
   });
+});
+
+test('승인 화면 문구 표가 스코프 개수와 맞는다', () => {
+  // 유저는 스코프 문자열이 아니라 한국어 문구를 본다. 두 표가 어긋나면
+  // "직접 대조해 보세요" 가 성립하지 않는다.
+  const md = fs.readFileSync(path.join(ROOT, 'docs', 'install.md'), 'utf8');
+  const head = md.indexOf('| 화면에 이렇게 나와요 |');
+  assert.notEqual(head, -1, '승인 화면 문구 표를 못 찾았다');
+  const table = md.slice(head, md.indexOf('\n\n', head));
+  const rows = table.split('\n').filter((l) => l.startsWith('|')).length - 2; // 헤더+구분선
+  assert.equal(rows, (MANIFEST.oauthScopes || []).length,
+    '화면 문구 줄 수가 스코프 개수와 다르다');
 });
 
 test('매니페스트가 라이브러리를 고정 버전으로 참조한다', () => {
