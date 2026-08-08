@@ -400,6 +400,27 @@ function writeStatus_(result) {
   var folder = ensureFolder_(DriveApp, CFG.folderName);
   result.at = new Date().toISOString();
   putJson_(folder, 'status.json', JSON.stringify(result, null, 2));
+  writeStatusToSheet_(result);
+}
+
+/**
+ * 시트에 붙어 있으면 첫 화면에도 상태를 적는다.
+ * 유저가 시트를 열자마자 "잘 돌고 있나" 를 보게 하는 게 목적이다 —
+ * Drive 의 status.json 을 열어보라고 할 수는 없다.
+ * 독립 스크립트면 조용히 넘어간다.
+ */
+function writeStatusToSheet_(result) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return;
+    var sh = ss.getSheets()[0];
+    sh.getRange('B10').setValue((result.ok ? '✅ ' : '⚠️ ') + result.message);
+    sh.getRange('B11').setValue(
+      '마지막 확인 ' +
+      Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm'));
+  } catch (e) {
+    // 시트에 안 붙어 있거나 권한이 없다. 상태는 이미 Drive 에 남았으니 넘어간다.
+  }
 }
 
 
