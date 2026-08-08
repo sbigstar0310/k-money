@@ -12,7 +12,7 @@
  */
 
 var KM = (globalThis.KM = globalThis.KM || {});
-KM.VERSION = '0.1.0';
+KM.VERSION = '0.1.1';
 
 // ════════════════════════════════════════════════════════════════════
 // core/model.js
