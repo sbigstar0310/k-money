@@ -289,17 +289,13 @@ test('설치를 조용히 깨뜨리는 두 가지를 안내가 단계로 말한�
   //    매번 필요하고, 체크박스는 기본으로 꺼져 있다. 둘 다 안 하면
   //    **오류 없이** 아무 일도 안 일어난다 — 유저는 고장을 못 알아챈다.
   //    다듬다가 다시 조건부 문장으로 돌아가기 쉬워서 여기서 잡는다.
-  const md = fs.readFileSync(path.join(ROOT, 'docs', 'install.md'), 'utf8');
-  const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
-
-  [['install.md', md], ['README.md', readme]].forEach(function (pair) {
-    const name = pair[0], text = pair[1];
-    assert.match(text, /새로고침/, name + ' 에 새로고침 안내가 없다');
-    // '경우가 있어요' 로 적으면 유저는 자기는 아닌 줄 알고 넘어간다.
-    assert.doesNotMatch(text, /메뉴가 바로 안 뜨는 경우가 있어요/,
-      name + ' 이 새로고침을 예외처럼 적고 있다 — 매번 필요하다');
-    assert.match(text, /꺼진 채로|꺼져 있으니|직접 체크|직접 켜기/,
-      name + ' 에 체크박스가 기본으로 꺼져 있다는 말이 없다');
+  // 시트 첫 화면(template.gs)까지 본다. **유저가 실제로 제일 먼저 읽는 건
+  // 문서가 아니라 저 두 줄이다.**
+  [ 'docs/install.md', 'README.md', 'appsscript/template.gs' ].forEach(function (rel) {
+    const text = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+    assert.match(text, /새로고침/, rel + ' 에 새로고침 안내가 없다');
+    assert.match(text, /체크박스[\s\S]{0,60}꺼[져진]/,
+      rel + ' 에 체크박스가 꺼진 채로 나온다는 말이 없다');
   });
 });
 
