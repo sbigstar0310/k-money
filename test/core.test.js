@@ -470,17 +470,70 @@ test('소스에 NUL 바이트가 없다 — 두 번 당한 함정이다', () => 
 
 test('pace 는 남과 오간 이체만 더한다 — 여섯 공식 중 하나만 맞다', () => {
   // 실측: pace 를 지우면 LLM 이 만들 수 있는 공식 6개 중 4개가 부호를 뒤집었다.
-  const f = build([
-    H.income('2025-01-01', 1000000),
-    H.expense('2025-01-15', 3000000),
-    H.transfer('2025-01-10', 2500000, '회사'),     // 남 → 더한다
-    H.transfer('2025-01-20', 400000, '홍길동'),    // 본인 → 안 더한다
-  ], { assets: [{ group: '자유입출금 자산', name: '통장', amount: 5000000 }] });
+  // 12개월로 편다 — 짧은 관측이면 pace.monthly 를 아예 안 내보내기 때문이다.
+  // 12개월로 편다 — 짧으면 pace.monthly 를 안 내보낸다.
+  // 남과 오간 이체는 수입의 5% 아래로 둔다 — 그보다 크면 pace 자체를 막는다.
+  const txns = [];
+  for (let m = 1; m <= 12; m++) {
+    const mm = String(m).padStart(2, '0');
+    txns.push(H.income('2025-' + mm + '-01', 3000000));
+    txns.push(H.expense('2025-' + mm + '-15', 1000000));
+    txns.push(H.transfer('2025-' + mm + '-10', 100000, '회사'));     // 남 → 더한다
+    txns.push(H.transfer('2025-' + mm + '-20', 400000, '홍길동'));   // 본인 → 안 더한다
+  }
+  const f = build(txns, { assets: [{ group: '자유입출금 자산', name: '통장', amount: 5000000 }] });
 
-  // (1,000,000 − 3,000,000 + 2,500,000) = +500,000. 관측 1개월 미만은 1개월로 본다.
-  assert.strictEqual(f.pace.monthly, 500000);
-  assert.notStrictEqual(f.pace.monthly, -2000000, '이체를 통째로 빼면 부호가 뒤집힌다');
-  assert.notStrictEqual(f.pace.monthly, 900000, '본인 이체까지 더하면 없는 돈이 생긴다');
+  // 달마다 (3,000,000 − 1,000,000 + 100,000) = +2,100,000
+  const total = f.pace.monthly * f.pace.observedMonths;
+  assert.ok(Math.abs(total - 25200000) < 250000, '실제로는 ' + total);
+  const perMonth = total / 12;
+  assert.ok(Math.abs(perMonth - 1900000) > 100000, '이체를 통째로 빼면 190만이 된다');
+  assert.ok(Math.abs(perMonth - 2500000) > 100000, '본인 이체까지 더하면 250만이 된다');
+});
+
+test('관측이 짧으면 월 단위 값을 아예 내보내지 않는다', () => {
+  // 설치 첫날 며칠치만 들어오면 pace 가 월 292만, 비상금이 35개월치로 나왔다.
+  // 플래그도 없었다. 그 숫자를 보고 안심하는 게 이 도구의 최악이다.
+  const f = build([
+    H.income('2026-03-15', 3000000),
+    H.expense('2026-03-15', 80000),
+  ], { assets: [{ group: '자유입출금 자산', name: '통장', amount: 2840000 }] });
+
+  assert.strictEqual(f.pace.monthly, undefined, '며칠치를 월로 늘리면 안 된다');
+  assert.strictEqual(f.pace.monthlyOmitted, 'shortObservation');
+  assert.strictEqual(f.flow.avgMonthlyExpense, undefined);
+  assert.strictEqual(f.cash.monthsOfExpense, undefined, '비상금 35개월치가 여기서 나왔다');
+  assert.ok(f.dataQuality.flags.some((x) => x.code === 'shortObservation'),
+    '조용히 빼면 안 된다. 왜 없는지 말해야 한다');
+  // 재료는 남는다 — 판단은 LLM 이 한다.
+  assert.ok(f.flow.expense > 0 && f.cash.total > 0);
+});
+
+test('미분류 이체가 크면 pace 도 savingsRate 처럼 막는다', () => {
+  // 카카오뱅크 세이프박스로 매달 100만원을 옮기면 적요가 상품명이라
+  // 본인 계좌로 안 잡힌다. 실제 여유는 월 150만인데 51만으로 나왔었다.
+  const txns = [];
+  for (let m = 1; m <= 12; m++) {
+    const mm = String(m).padStart(2, '0');
+    txns.push(H.income('2025-' + mm + '-25', 3000000));
+    txns.push(H.expense('2025-' + mm + '-10', 1500000));
+    txns.push(H.transfer('2025-' + mm + '-26', -1000000, '카카오뱅크세이프박스'));
+  }
+  const f = build(txns);
+
+  assert.strictEqual(f.pace.monthly, undefined,
+    'savingsRate 는 숨기면서 같은 값으로 만든 pace 를 내보내면 앞뒤가 안 맞는다');
+  assert.strictEqual(f.pace.monthlyOmitted, 'unclassifiedTransfers');
+  assert.strictEqual(f.flow.savingsRateOmitted, 'unclassifiedTransfers');
+  // 한쪽 끝이 아니라 폭을 준다 — '전부 내 계좌였다면' 쪽 값.
+  assert.ok(f.pace.monthlyIfExternalIsOwn > 1400000,
+    '실제로는 ' + f.pace.monthlyIfExternalIsOwn);
+});
+
+test('수입이 없으면 그 이유를 이체 탓으로 돌리지 않는다', () => {
+  // 거래가 0건인데 'unclassifiedTransfers' 라고 적고 있었다. 이체가 한 건도 없는데.
+  const f = build([H.expense('2025-01-01', 1000)]);
+  assert.strictEqual(f.flow.savingsRateOmitted, 'noIncome');
 });
 
 test('잘라낸 목록의 나머지를 밝힌다 — 안 밝히면 검산이 안 맞는다', () => {
@@ -506,6 +559,82 @@ test('양끝의 잘린 달을 표시한다 — 8일치를 한 달로 읽으면 �
   assert.strictEqual(last.daysObserved, 8, '3월은 8일치뿐이다');
 });
 
+test('daysObserved 는 관측한 날 수다 — 마지막 거래일의 일(日)이 아니다', () => {
+  // 3월 15일 하루치가 'daysObserved: 15' 였다. 그 달 1일부터 봤다는
+  // 가정이 깔려 있었다. 연환산하면 15배 과소평가된다.
+  const f = build([H.income('2026-03-15', 3000000), H.expense('2026-03-15', 80000)]);
+  assert.strictEqual(f.flow.monthly[0].daysObserved, 1);
+});
+
+test('잘린 첫 달에도 daysObserved 를 준다', () => {
+  // 마지막 달만 주고 첫 달은 partial 표시만 했다. 비대칭이라 소비자가
+  // 첫 달을 온전한 달로 읽는다.
+  const f = build([H.expense('2025-01-15', 500000), H.expense('2025-03-08', 100000)]);
+  assert.strictEqual(f.flow.monthly[0].daysObserved, 17, '1/15~1/31');
+  assert.strictEqual(f.flow.monthly[1].daysObserved, 8, '3/01~3/08');
+});
+
+test('순액 0인 이체 상대가 목록에서 사라지지 않는다', () => {
+  // 700만 받고 700만 보낸 상대는 net === 0 이라 inflows(>0) 에도
+  // outflows(<0) 에도 안 들어갔다. 1,400만원이 오간 사람의 이름이
+  // 아무 데도 안 남았다 — 그걸 드러내려고 만든 코드에서.
+  const f = build([
+    H.income('2025-01-01', 10000000),
+    H.transfer('2025-01-10', 7000000, '김철수'),
+    H.transfer('2025-01-20', -7000000, '김철수'),
+  ]);
+  const named = f.transfers.external.topInflows.concat(f.transfers.external.topOutflows)
+    .map((p) => p.party);
+  assert.ok(named.includes('김철수'), '이름이 사라졌다: ' + JSON.stringify(named));
+  assert.strictEqual(f.transfers.external.gross, 14000000);
+});
+
+test('구독 목록은 살아 있는 것부터 보여주고 잘라낸 만큼을 밝힌다', () => {
+  // 해지한 비싼 구독들이 상한을 다 먹으면 지금 나가는 돈이 하나도 안 보인다.
+  // hints 는 'label 을 보고 구분하라' 고 하는데 볼 label 이 없었다.
+  const txns = [];
+  for (let i = 0; i < 14; i++) {
+    // 비싼 해지 구독: 1~5월만
+    for (let m = 1; m <= 5; m++) {
+      txns.push(H.expense('2025-0' + m + '-10', 500000 + i, { desc: '해지' + i }));
+    }
+  }
+  for (let i = 0; i < 6; i++) {
+    for (let m = 1; m <= 12; m++) {
+      const mm = String(m).padStart(2, '0');
+      txns.push(H.expense('2025-' + mm + '-11', 50000 + i, { desc: '살아있음' + i }));
+    }
+  }
+  const f = build(txns);
+  const shownActive = f.recurring.items.filter((r) => r.active);
+  assert.ok(shownActive.length >= 6, '살아 있는 게 하나도 안 보인다');
+  const sum = shownActive.reduce((a, r) => a + r.monthlyMedian, 0)
+    + (f.recurring.otherActiveTotal || 0);
+  assert.strictEqual(sum, f.recurring.activeMonthlyTotal, '합계와 목록이 안 맞는다');
+});
+
+test('보이는 급증만으로 monthlyExSpikes 를 만든다', () => {
+  // 급증을 밖에서는 걸러 5개만 내보내면서 pace 는 안 거른 전체를 썼다.
+  // 두 숫자의 차이가 보이는 급증 합계와 안 맞는데 검산할 방법이 없다.
+  const txns = [];
+  for (let m = 1; m <= 12; m++) {
+    const mm = String(m).padStart(2, '0');
+    txns.push(H.income('2025-' + mm + '-01', 5000000));
+    for (let c = 0; c < 10; c++) {
+      txns.push(H.expense('2025-' + mm + '-10', 100000, { major: '분류' + c }));
+    }
+  }
+  for (let c = 0; c < 10; c++) {
+    txns.push(H.expense('2025-06-20', 2500000, { major: '분류' + c }));
+  }
+  const f = build(txns);
+  const visible = f.spikes.reduce((a, s) => a + s.excess, 0);
+  const implied = (f.pace.monthlyExSpikes - f.pace.monthly) * f.pace.observedMonths;
+  assert.ok(Math.abs(implied - visible) < visible * 0.02,
+    '보이는 급증 ' + visible + ' 인데 pace 차이는 ' + Math.round(implied));
+  if (f.spikesOther) assert.ok(f.spikesOther.count > 0, '잘라냈으면 밝혀야 한다');
+});
+
 test('카테고리×월 교차에서 안 쓴 달은 0으로 채운다', () => {
   const txns = [];
   for (let m = 1; m <= 6; m++) {
@@ -521,14 +650,14 @@ test('카테고리×월 교차에서 안 쓴 달은 0으로 채운다', () => {
 });
 
 test('우리가 고른 상수로 결론을 내지 않는다 — 삭제된 것들이 돌아오지 않게', () => {
-  const f = build([H.expense('2025-01-01', 1000)], {
+  const f = build([H.expense('2025-01-01', 1000), H.expense('2025-06-01', 1000)], {
     assets: [{ group: '자유입출금 자산', name: '통장', amount: 5000000 }],
   });
   // 전부 "우리가 임의로 고른 값" 이라 뺐다. 재료는 남아 있고 배수는 LLM 이 정한다.
   assert.strictEqual(f.goal, undefined, 'goalTable·levers·suggestedHorizons');
   assert.strictEqual(f.cash.emergencyBuffer3m, undefined, '비상금 몇 개월인지는 우리가 못 정한다');
   assert.strictEqual(f.cash.aboveBuffer, undefined);
-  assert.ok(f.cash.total > 0 && f.cash.monthsOfExpense !== undefined, '재료는 남긴다');
+  assert.ok(f.cash.total > 0, '재료는 남긴다');
 });
 
 test('고정지출에 무엇이 들었는지 밝힌다 — 총액만 주면 월세도 끊으라는 말이 된다', () => {

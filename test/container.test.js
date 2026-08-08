@@ -307,6 +307,36 @@ test('샘플 산출물이 실제 스키마와 같고 커넥터 한도 안에 든
   assert.ok(JSON.stringify(sample).length < 40000, '커넥터가 못 읽을 만큼 크다');
   // 실데이터를 실수로 커밋하는 걸 막는다.
   assert.equal(sample.sourceMessageId, 'sample');
+
+  // ⚠️ 손으로 고치면 반드시 실제 산출물과 어긋난다. 스크립트로만 만든다.
+  const { execFileSync } = require('node:child_process');
+  const before = fs.readFileSync(path.join(ROOT, 'docs', 'sample-latest.json'), 'utf8');
+  execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'make-sample.js')], { cwd: ROOT });
+  const after = fs.readFileSync(path.join(ROOT, 'docs', 'sample-latest.json'), 'utf8');
+  assert.equal(after, before, 'sample 이 낡았다 — node scripts/make-sample.js 를 돌려라');
+});
+
+test('샘플 안에서 잘라낸 값이 전부 검산된다', () => {
+  // 유저가 설치 전에 보는 파일이다. 여기서 합이 안 맞으면
+  // "내 데이터에 이상한 거 있어?" 에 LLM 이 오탐을 낸다.
+  const s = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'sample-latest.json'), 'utf8'));
+  const sum = (a, f) => a.reduce((x, y) => x + (f ? y[f] : y), 0);
+
+  assert.equal(sum(s.flow.monthly, 'expense'), s.flow.expense);
+  assert.equal(sum(s.categories.items, 'amount') + (s.categories.otherTotal || 0), s.flow.expense);
+  assert.equal(sum(s.merchants.items, 'amount') + (s.merchants.otherTotal || 0), s.flow.expense);
+
+  const shownActive = sum(s.recurring.items.filter((r) => r.active), 'monthlyMedian');
+  assert.equal(shownActive + (s.recurring.otherActiveTotal || 0), s.recurring.activeMonthlyTotal);
+
+  // pace 의 두 값 차이는 보이는 급증으로 설명돼야 한다.
+  if (s.pace.monthlyExSpikes) {
+    const implied = (s.pace.monthlyExSpikes - s.pace.monthly) * s.pace.observedMonths;
+    const visible = sum(s.spikes, 'excess') + (s.spikesOther ? s.spikesOther.excess : 0);
+    assert.ok(Math.abs(implied - visible) < visible * 0.02,
+      '보이는 급증 ' + visible + ' 인데 pace 차이는 ' + Math.round(implied));
+  }
+  assert.equal(s.snapshotAge, undefined, 'snapshotAge 는 나이였다. ownerAge 로 바꿨다');
 });
 
 // ── 매니페스트가 코드와 맞는가 ────────────────────────────────────

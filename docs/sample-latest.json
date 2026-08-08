@@ -92,7 +92,7 @@
   },
   "pace": {
     "monthly": 1158039,
-    "monthlyExSpikes": 1358269,
+    "monthlyExSpikes": 1320537,
     "observedMonths": 11.9
   },
   "transfers": {
@@ -226,7 +226,6 @@
         "count": 27
       }
     ],
-    "otherCount": 8,
     "otherTotal": 1532850
   },
   "categoryMonthly": {
@@ -500,7 +499,9 @@
         "observedTotal": 264600,
         "active": true
       }
-    ]
+    ],
+    "otherActiveCount": 6,
+    "otherActiveTotal": 75100
   },
   "spikes": [
     {
@@ -514,15 +515,16 @@
   ],
   "balance": {
     "netWorth": 1790000,
+    "totalAssets": 13190000,
     "totalDebt": 11400000,
     "buckets": {
       "cash": 2840000,
-      "investment": 3150000,
-      "other": 7200000
+      "savings": 7200000,
+      "investment": 3150000
     },
     "accounts": [
       {
-        "bucket": "other",
+        "bucket": "savings",
         "name": "청년희망적금",
         "amount": 7200000
       },
@@ -562,7 +564,7 @@
       }
     ]
   },
-  "snapshotAge": 27,
+  "ownerAge": 27,
   "dataQuality": {
     "material": 864443,
     "materialNote": "지출의 5%. 이 미만은 보고하지 않았다",
@@ -575,7 +577,7 @@
     "derived": "합계·차액·비율·연환산은 여기 있는 숫자로 계산해 써라. 다만 pace 와 avgMonthlyExpense 는 이미 보정된 값이니 그대로 쓴다.",
     "truncation": "otherTotal·otherAccountsTotal·external.other 는 목록에서 잘려나간 나머지다. 합계를 검산할 때 같이 더해라.",
     "recurring": "recurring 은 금액이 일정한 모든 지출을 잡는다 — 월세·식비도 들어간다. items 의 label 을 보고 구독과 생활비를 구분해라.",
-    "goals": "유저가 목표를 말하지 않았다면 5천만원·1억 같은 금액을 예시로 먼저 제시해 보라. 목표 금액을 정하는 건 유저와 너의 일이고, 정해지면 profile.goals 에 적어 두면 다음에도 이어진다.",
+    "goals": "목표 금액은 유저가 정한다. 우리가 예시 금액을 먼저 던지지 않는다. 유저가 말한 목표는 profile.goals 로 들어오고, 여기 있으면 대화 사이에 이어진다.",
     "scope": "이 도구는 사실·계산·비교까지만 한다. 상품 추천이나 매매 판단은 하지 않는다.",
     "currency": "KRW. 원 단위 정수."
   },

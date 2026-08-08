@@ -101,15 +101,26 @@ KM.analyze = (function () {
   function avgMonthlyExpense(txns) {
     var rows = monthlyTotals(txns);
     if (!rows.length) return 0;
+    var spent = M.sum(rows, function (r) { return r.expense; });
+    return Math.round(spent / observedMonths(txns));
+  }
+
+  /**
+   * 실제 관측 개월. **이 규칙이 두 군데에 복사돼 있었다** — avgMonthlyExpense 와
+   * pace 가 각자 계산했고, 한쪽에서 `span < 1` 보정을 지워도 아무 테스트도
+   * 깨지지 않았다. 둘이 어긋나면 같은 문서 안의 두 숫자가 다른 분모를 쓴다.
+   *
+   * 이체만 있는 날은 세지 않는다 — 흐름을 관측한 기간이 아니다.
+   */
+  function observedMonths(txns) {
     var days = [];
     for (var i = 0; i < txns.length; i++) {
       if (txns[i].kind !== M.Kind.TRANSFER) days.push(txns[i].day);
     }
+    if (!days.length) return 1;
     days.sort();
     var span = dayDiff(days[0], days[days.length - 1]) / DAYS_PER_MONTH;
-    if (span < 1) span = 1; // 한 달 미만은 한 달로 본다 (과대평가 방지)
-    var spent = M.sum(rows, function (r) { return r.expense; });
-    return Math.round(spent / span);
+    return span < 1 ? 1 : span; // 한 달 미만은 한 달로 본다 (과대평가 방지)
   }
 
   // ── 이체 분해 ──────────────────────────────────────────────────
@@ -144,8 +155,14 @@ KM.analyze = (function () {
         extNet += t.amount;
         extCount++;
         if (t.amount > 0) extIn += t.amount; else extOut += t.amount;
-        if (!party[t.desc]) party[t.desc] = { party: t.desc, net: 0, count: 0 };
+        if (!party[t.desc]) party[t.desc] = { party: t.desc, net: 0, gross: 0, count: 0 };
         party[t.desc].net += t.amount;
+        // ⚠️ 총액도 센다. 순액만으로 줄을 세우면 **받은 만큼 보낸 상대가
+        //    양쪽 목록에서 다 사라진다.** 700만 받고 700만 보낸 사람은
+        //    net === 0 이라 inflows(>0) 에도 outflows(<0) 에도 안 들어가서,
+        //    1,400만원이 오간 상대의 이름이 아무 데도 안 남았다.
+        //    그 상황을 드러내려고 만든 코드에서 정작 이름이 사라졌다.
+        party[t.desc].gross += Math.abs(t.amount);
         party[t.desc].count++;
       }
     }
@@ -161,8 +178,11 @@ KM.analyze = (function () {
       externalIn: extIn,
       externalOut: extOut,
       externalGross: extIn - extOut,
-      inflows: list.filter(function (p) { return p.net > 0; })
-                   .sort(function (a, b) { return b.net - a.net; }),
+      // net === 0 인 상대는 inflows 쪽에 둔다. 어느 쪽도 아니면 사라지는데,
+      // 사라지는 게 하필 '많이 오갔는데 순액이 0인' — 제일 알려야 할 상대다.
+      // 같은 순액이면 총액이 큰 쪽을 앞에 둔다.
+      inflows: list.filter(function (p) { return p.net >= 0; })
+                   .sort(function (a, b) { return (b.net - a.net) || (b.gross - a.gross); }),
       outflows: list.filter(function (p) { return p.net < 0; })
                     .sort(function (a, b) { return a.net - b.net; }),
     };
@@ -367,28 +387,31 @@ KM.analyze = (function () {
    *
    * 이 한 줄이 우리가 파는 것이다. 산수가 아니라 어떤 식을 쓸지에 대한 판단.
    */
-  function pace(txns, owner) {
+  function pace(txns, owner, reportedSpikes) {
     var t = totals(txns);
     var tb = transferBalance(txns, owner);
     var rows = monthlyTotals(txns);
     if (!rows.length) return null;
 
-    var days = [];
-    for (var i = 0; i < txns.length; i++) {
-      if (txns[i].kind !== M.Kind.TRANSFER) days.push(txns[i].day);
-    }
-    days.sort();
-    var months = dayDiff(days[0], days[days.length - 1]) / DAYS_PER_MONTH;
-    if (months < 1) months = 1;
-
+    var months = observedMonths(txns);
     var net = t.income - t.expense + tb.externalNet;
-    var spikeExcess = spikes(txns).reduce(function (s, x) { return s + x.excess; }, 0);
+
+    // ⚠️ **밖에서 보고한 급증만 되돌린다.**
+    //    예전에는 여기서 spikes(txns) 를 다시, 필터도 상한도 없이 불렀다.
+    //    그러면 monthlyExSpikes 와 spikes 배열이 서로 다른 집합을 가리켜서,
+    //    두 숫자의 차이가 보이는 급증 합계와 안 맞는다. 소비자(LLM)는
+    //    검산을 못 하고, 못 한다는 사실조차 모른다.
+    var visible = reportedSpikes || [];
+    var spikeExcess = visible.reduce(function (s, x) { return s + x.excess; }, 0);
 
     return {
       monthly: Math.round(net / months),
       // 급증을 일회성으로 보면 부호가 뒤집힐 수 있다 (실측 −20만 → +6만).
       // 어느 쪽인지는 데이터가 못 정한다. 그래서 둘 다 싣는다.
       monthlyExSpikes: spikeExcess > 0 ? Math.round((net + spikeExcess) / months) : null,
+      // 남과 오간 이체를 통째로 '내 계좌였다' 로 보면 얼마인가.
+      // 이체가 미분류일 때 위쪽 값 대신 내보낸다 — 한쪽 끝이 아니라 폭을 준다.
+      monthlyExcludingExternal: Math.round((t.income - t.expense) / months),
       observedMonths: Math.round(months * 10) / 10,
     };
   }
@@ -401,6 +424,7 @@ KM.analyze = (function () {
   return {
     median: median, monthIndex: monthIndex, monthRange: monthRange, dayDiff: dayDiff,
     monthlyTotals: monthlyTotals, totals: totals, avgMonthlyExpense: avgMonthlyExpense,
+    observedMonths: observedMonths,
     transferBalance: transferBalance, recurring: recurring, spikes: spikes,
     byCategory: byCategory, categoryByMonth: categoryByMonth,
     byMerchant: byMerchant, pace: pace, refunds: refunds,
