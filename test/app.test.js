@@ -58,14 +58,14 @@ function fakeBlob(name, content) {
 /**
  * 가짜 Drive 폴더.
  *
- * ⚠️ **이름을 열쇠로 쓰는 Map 이 아니라 배열이다.** 드라이브는 같은 이름의
- *    파일을 막지 않는다 — 같은 이름으로 두 번 만들면 덮이지 않고 **두 개가
- *    된다** (실측). Map 으로 두면 그 제약이 사라져서, 메모리 정리가 풀려는
- *    문제 자체가 테스트 안에서는 일어나지 않는다.
+ * ⚠️ **이름을 열쇠로 쓰는 Map 이 아니라 배열이다.** 드라이브는 같은 이름을
+ *    막지 않는다 — 같은 이름으로 두 번 만들면 덮이지 않고 **두 개가 된다**
+ *    (실측). 파일도 **폴더도** 그렇다. Map 으로 두면 그 제약이 사라져서,
+ *    메모리 정리가 풀려는 문제 자체가 테스트 안에서는 일어나지 않는다.
  */
 function fakeFolder(name) {
   const files = [];
-  const folders = new Map();
+  const folders = [];
   const iter = (arr) => {
     let i = 0;
     return { hasNext: () => i < arr.length, next: () => arr[i++] };
@@ -77,18 +77,18 @@ function fakeFolder(name) {
     _get: (n) => files.filter((f) => f.getName() === n)[0],
     _count: () => files.length,
     getId: () => 'id-' + name,
-    getFoldersByName(n) {
-      const f = folders.get(n);
-      let done = !f;
-      return { hasNext: () => !done, next: () => { done = true; return f; } };
-    },
-    createFolder(n) { const f = fakeFolder(n); folders.set(n, f); return f; },
+    getFoldersByName(n) { return iter(folders.filter((f) => f._name === n)); },
+    createFolder(n) { const f = fakeFolder(n); folders.push(f); return f; },
     getFilesByName(n) { return iter(files.filter((f) => f.getName() === n)); },
     getFiles() { return iter(files.slice()); },
     createFile(blob) {
       let content = blob.getDataAsString ? blob.getDataAsString() : '';
+      // ⚠️ 이름을 **만들 때 붙잡는다.** blob.getName() 을 그대로 물고 있으면
+      //    나중에 blob.setName() 을 부른 쪽이 이미 만들어진 파일 이름까지
+      //    소급해서 바꾼다 — 실제 드라이브는 안 그런다.
+      const fileName = blob.getName();
       const file = {
-        getName: () => blob.getName(),
+        getName: () => fileName,
         getBlob: () => ({ getDataAsString: () => content }),
         // 테스트가 필요하면 덮어쓴다. 기본값이 같으므로 동점 처리도 지난다.
         getDateCreated: () => new Date(0),
@@ -103,7 +103,24 @@ function fakeFolder(name) {
       return file;
     },
   };
+  self._name = name;
   return self;
+}
+
+/**
+ * 메모리 폴더에 파일을 놓는다. `['이름', '생성시각']` 또는 그냥 `'이름'`.
+ * 돌려주는 `mem` 은 첫 번째 메모리 폴더다.
+ */
+function memoryWith(A, names) {
+  const root = fakeFolder('돈동생');
+  const mem = root.createFolder(A.CFG.memoryFolder);
+  const files = names.map((n) => {
+    const [name, t] = Array.isArray(n) ? n : [n, null];
+    const f = mem.createFile(fakeBlob(name, 'x'));
+    if (t) f.getDateCreated = () => new Date(t);
+    return f;
+  });
+  return { root, mem, files };
 }
 
 function propsStub(map) {
@@ -664,31 +681,51 @@ test('AGENT.md 가 쓰기 규칙과 경계를 담는다', () => {
 test('memoTopic — 날짜를 벗기고 주제만 남긴다', () => {
   const A = loadApp();
   assert.equal(A.memoTopic('2026-08-09-목표.md'), '목표');
-  assert.equal(A.memoTopic('2026-08-09-1430-목표.md'), '목표');
-  assert.equal(A.memoTopic('2026-08-09T14:30-이직생각.md'), '이직생각');
   assert.equal(A.memoTopic('2026-08-09_수입.md'), '수입');
+  assert.equal(A.memoTopic('2026-08-09T14:30-이직생각.md'), '이직생각');
+  // 초까지 붙은 ISO 도 받는다. 예전엔 여기서 null 이 나와 그 주제가
+  // **영영 안 치워졌다** — 모순되는 파일이 계속 쌓이는 쪽이다.
+  assert.equal(A.memoTopic('2026-08-09T14:30:05-목표.md'), '목표');
+  assert.equal(A.memoTopic('2026-08-09 14:30-목표.md'), '목표');
+});
+
+test('memoTopic — .md 가 아니면 규칙 밖이다', () => {
+  // ⚠️ 예전엔 확장자를 먼저 떼고 나머지를 봐서 '2026-08-09-카드명세.pdf' 가
+  //    '카드명세.pdf' 라는 주제로 잡혔다. 날짜를 앞에 붙여 정리해 둔 유저의
+  //    명세서·사진이 날마다 하나씩 휴지통으로 갔다.
+  const A = loadApp();
+  ['2026-08-09-카드명세.pdf', '2026-07-01-가족사진.jpg', '2026-08-09-메모.txt']
+    .forEach((n) => assert.equal(A.memoTopic(n), null, n));
+});
+
+test('memoTopic — 맨 네 자리 숫자를 시각으로 읽지 않는다', () => {
+  // ⚠️ 읽으면 '2030-은퇴계획' 과 '2040-은퇴계획' 이 같은 주제가 되고
+  //    **서로 다른 둘 중 하나가 지워진다.** 못 알아보는 쪽이 안전하다.
+  const A = loadApp();
+  assert.equal(A.memoTopic('2026-08-09-2030-은퇴계획.md'), '2030-은퇴계획');
+  assert.notEqual(
+    A.memoTopic('2026-08-09-2030-은퇴계획.md'),
+    A.memoTopic('2026-08-10-2040-은퇴계획.md'),
+    '서로 다른 두 주제가 하나로 합쳐졌다');
 });
 
 test('memoTopic — 규칙에 안 맞으면 null (유저 파일을 건드리지 않는다)', () => {
   const A = loadApp();
-  [ '메모.md', 'AGENT.md', '내가 쓴 글.md', '2026-목표.md' ].forEach((n) => {
-    assert.equal(A.memoTopic(n), null, n);
+  [ '메모.md', 'AGENT.md', '내가 쓴 글.md', '2026-목표.md',
+    '2026-08-09-   .md' ].forEach((n) => {
+    // '' 가 아니라 null 이어야 한다. 계약이 그렇고, === null 로 보는
+    // 다음 사람이 조용히 틀린다.
+    assert.strictEqual(A.memoTopic(n), null, n);
   });
 });
 
 test('pruneMemory — 주제마다 최신 하나만 남긴다', () => {
   const A = loadApp();
-  const root = fakeFolder('돈동생');
-  const mem = root.createFolder(A.CFG.memoryFolder);
-  const put = (name, t) => {
-    const f = mem.createFile(fakeBlob(name, 'x'));
-    f.getDateCreated = () => new Date(t);
-    return f;
-  };
-  const old1 = put('2026-08-01-목표.md', '2026-08-01');
-  const new1 = put('2026-08-09-목표.md', '2026-08-09');
-  const only = put('2026-08-05-수입.md', '2026-08-05');
-
+  const { root, mem } = memoryWith(A, [
+    ['2026-08-01-목표.md', '2026-08-01'],
+    ['2026-08-09-목표.md', '2026-08-09'],
+    ['2026-08-05-수입.md', '2026-08-05'],
+  ]);
   const r = A.pruneMemory(root);
   assert.equal(r.topics, 2);
   assert.equal(r.trashed, 1);
@@ -700,16 +737,10 @@ test('pruneMemory — 주제마다 최신 하나만 남긴다', () => {
 test('pruneMemory — 순서는 파일 이름이 아니라 생성 시각으로 본다', () => {
   // AI 가 날짜를 틀리게 붙일 수 있다. 시간대를 모르거나 오늘이 며칠인지 모른다.
   const A = loadApp();
-  const root = fakeFolder('돈동생');
-  const mem = root.createFolder(A.CFG.memoryFolder);
-  const put = (name, t) => {
-    const f = mem.createFile(fakeBlob(name, 'x'));
-    f.getDateCreated = () => new Date(t);
-  };
-  // 이름은 8/01 인데 실제로는 나중에 만들어졌다
-  put('2026-08-20-목표.md', '2026-08-01');
-  put('2026-08-01-목표.md', '2026-08-20');
-
+  const { root, mem } = memoryWith(A, [
+    ['2026-08-20-목표.md', '2026-08-01'],   // 이름은 8/20 인데 먼저 만들어졌다
+    ['2026-08-01-목표.md', '2026-08-20'],
+  ]);
   A.pruneMemory(root);
   assert.ok(mem._has('2026-08-01-목표.md'), '이름만 보고 지웠다');
   assert.ok(!mem._has('2026-08-20-목표.md'));
@@ -717,30 +748,20 @@ test('pruneMemory — 순서는 파일 이름이 아니라 생성 시각으로 �
 
 test('pruneMemory — 규칙에 안 맞는 파일은 손대지 않는다', () => {
   const A = loadApp();
-  const root = fakeFolder('돈동생');
-  const mem = root.createFolder(A.CFG.memoryFolder);
-  mem.createFile(fakeBlob('내가 직접 쓴 메모.md', 'x'));
-  mem.createFile(fakeBlob('사진.png', 'x'));
+  const { root, mem } = memoryWith(A, [
+    '내가 직접 쓴 메모.md',
+    '사진.png',
+    '2026-08-09-카드명세.pdf',   // 날짜가 붙어 있어도 .md 가 아니면 남의 것이다
+    '2026-07-01-가족사진.jpg',
+  ]);
   const r = A.pruneMemory(root);
-  assert.equal(r.trashed, 0);
-  assert.equal(r.unnamed, 2, '유저 파일이 몇 개인지 안 세고 있다');
-  assert.equal(r.files, 0);
-  assert.equal(mem._count(), 2, '유저 파일을 지웠다');
+  assert.equal(r.trashed, 0, '유저 파일을 지웠다');
+  assert.equal(r.unnamed, 4, '유저 파일이 몇 개인지 안 세고 있다');
+  assert.equal(r.memos, 0);
+  assert.equal(mem._count(), 4, '유저 파일을 지웠다');
 });
 
 // ── 메모리: 이름이 열쇠라서 생기는 것들 ──────────────────────────────
-
-/** 메모리 폴더에 파일을 놓는 도우미. t 를 주면 생성 시각까지. */
-function memoryWith(A, names) {
-  const root = fakeFolder('돈동생');
-  const mem = root.createFolder(A.CFG.memoryFolder);
-  names.forEach((n) => {
-    const [name, t] = Array.isArray(n) ? n : [n, null];
-    const f = mem.createFile(fakeBlob(name, 'x'));
-    if (t) f.getDateCreated = () => new Date(t);
-  });
-  return { root: root, mem: mem };
-}
 
 test('pruneMemory — 주제가 constructor 여도 죽지 않는다', () => {
   // ⚠️ 평범한 {} 는 'constructor' 를 이미 갖고 있다. 배열을 안 만들고 함수에
@@ -826,12 +847,15 @@ test('pruneMemory — 생성 시각이 같으면 이름이 큰 쪽을 남긴다'
 });
 
 test('pruneMemory — 한 번에 지우는 개수에 상한이 있다', () => {
-  // 묶기가 잘못돼 전부 한 주제로 뭉치는 날이 와도 피해가 여기서 멈춘다.
+  // setTrashed 하나가 드라이브 왕복 한 번이고, 정리는 상태를 쓰기 전에
+  // 6분짜리 실행 예산 안에서 돈다. 상한이 없으면 시간 초과가 상태 파일까지
+  // 못 쓰게 만든다.
   const A = loadApp();
   const n = A.CFG.memoryTrashBudget + 5;
   const names = [];
   for (let i = 0; i < n; i++) {
-    names.push(['2026-08-09-1' + String(i).padStart(3, '0') + '-목표.md', '2026-08-09']);
+    // 이름까지 똑같은 파일 n 개 — 드라이브가 허용하는 그 모양 그대로.
+    names.push(['2026-08-09-목표.md', new Date(Date.UTC(2026, 7, 9, 0, 0, i))]);
   }
   const { root, mem } = memoryWith(A, names);
   const r = A.pruneMemory(root);
@@ -840,32 +864,102 @@ test('pruneMemory — 한 번에 지우는 개수에 상한이 있다', () => {
   assert.equal(mem._count(), n - A.CFG.memoryTrashBudget);
 });
 
+test('pruneMemory — 상한에 딱 맞으면 잘렸다고 하지 않는다', () => {
+  // 예산을 정확히 다 쓴 것과 남은 걸 못 지운 것은 다른 사건이다.
+  const A = loadApp();
+  const names = [];
+  for (let i = 0; i <= A.CFG.memoryTrashBudget; i++) {
+    names.push(['2026-08-09-목표.md', new Date(Date.UTC(2026, 7, 9, 0, 0, i))]);
+  }
+  const r = A.pruneMemory(memoryWith(A, names).root);
+  assert.equal(r.trashed, A.CFG.memoryTrashBudget);
+  assert.equal(r.trashCapped, undefined, '딱 맞았는데 잘렸다고 한다');
+});
+
+test('pruneMemory — 한 파일이 못 지워져도 나머지는 계속 치운다', () => {
+  // ⚠️ 공유 폴더에서는 남이 만든 파일에 setTrashed 가 'Access denied' 로
+  //    던진다. 그 하나 때문에 멈추면 **그날부터 정리가 영영 안 된다.**
+  const A = loadApp();
+  const { root, mem, files } = memoryWith(A, [
+    ['2026-08-01-목표.md', '2026-08-01'],
+    ['2026-08-09-목표.md', '2026-08-09'],
+    ['2026-08-01-수입.md', '2026-08-01'],
+    ['2026-08-09-수입.md', '2026-08-09'],
+  ]);
+  files[0].setTrashed = () => { throw new Error('Access denied: DriveApp'); };
+
+  const r = A.pruneMemory(root);
+  assert.equal(r.trashed, 1, '멀쩡한 쪽을 안 치웠다');
+  assert.equal(r.trashFailed, 1, '실패를 안 알렸다');
+  assert.ok(mem._has('2026-08-01-목표.md'), '못 지운 건 남아 있어야 한다');
+  assert.ok(!mem._has('2026-08-01-수입.md'), '다른 주제가 막혔다');
+});
+
+test('pruneMemory — 이름이 같은 메모리 폴더가 둘이어도 다 치운다', () => {
+  // ⚠️ 드라이브는 폴더 이름도 안 막는다. 하나만 보면 나머지는 영영 안
+  //    치워지고, 커넥터는 양쪽을 다 읽어 모순되는 파일을 본다.
+  const A = loadApp();
+  const root = fakeFolder('돈동생');
+  const a = root.createFolder(A.CFG.memoryFolder);
+  const b = root.createFolder(A.CFG.memoryFolder);
+  const put = (folder, name, t) => {
+    const f = folder.createFile(fakeBlob(name, 'x'));
+    f.getDateCreated = () => new Date(t);
+  };
+  put(a, '2026-08-01-목표.md', '2026-08-01');
+  put(b, '2026-08-09-목표.md', '2026-08-09');
+
+  const r = A.pruneMemory(root);
+  assert.equal(r.topics, 1, '두 폴더의 같은 주제를 따로 셌다');
+  assert.equal(r.trashed, 1);
+  assert.equal(a._count(), 0, '첫 폴더의 옛 것이 남았다');
+  assert.ok(b._has('2026-08-09-목표.md'), '최신을 지웠다');
+});
+
 test('pruneMemory — getDateCreated 를 파일마다 한 번만 묻는다', () => {
   // 드라이브 호출이다. 비교 함수 안에서 부르면 정렬 내내 다시 묻는다.
   const A = loadApp();
-  const root = fakeFolder('돈동생');
-  const mem = root.createFolder(A.CFG.memoryFolder);
+  const names = [];
+  for (let i = 1; i <= 8; i++) names.push('2026-08-0' + i + '-목표.md');
+  const { root, files } = memoryWith(A, names);
   let calls = 0;
-  for (let i = 1; i <= 8; i++) {
-    const f = mem.createFile(fakeBlob('2026-08-0' + i + '-목표.md', 'x'));
-    f.getDateCreated = () => { calls++; return new Date('2026-08-0' + i); };
-  }
+  files.forEach((f, i) => {
+    f.getDateCreated = () => { calls++; return new Date('2026-08-0' + (i + 1)); };
+  });
   A.pruneMemory(root);
   assert.equal(calls, 8, '파일당 한 번을 넘었다 (' + calls + '회)');
 });
 
-test('markMemorySeen — 처음 본 날을 남기고, 그 전까지는 never 로 답한다', () => {
+test('markMemorySeen — 처음 본 때를 남기고, 그 전까지는 never 로 답한다', () => {
   const A = loadApp();
   const props = propsStub({});
   // 비어 있으면 아직 못 본 것이다 — 기록도 남기지 않는다.
-  assert.equal(A.markMemorySeen(props, 0, '2026-08-09T00:00:00Z'), false);
+  assert.equal(A.markMemorySeen(props, 0, '2026-08-08T22:05:00.000Z'), false);
   assert.equal(props.getProperty('MEMORY_FIRST_SEEN'), null);
-  // 한 번 보면 날짜만 남긴다.
-  assert.equal(A.markMemorySeen(props, 3, '2026-08-09T00:00:00Z'), true);
-  assert.equal(props.getProperty('MEMORY_FIRST_SEEN'), '2026-08-09');
+  // ⚠️ 앞 10자만 떼면 '2026-08-08' 이 되는데 그건 한국 시각으로 8/9 오전
+  //    7시다. 매일 아침 도는 트리거는 늘 그 구간에 걸린다. 통째로 둔다.
+  assert.equal(A.markMemorySeen(props, 3, '2026-08-08T22:05:00.000Z'), true);
+  assert.equal(props.getProperty('MEMORY_FIRST_SEEN'), '2026-08-08T22:05:00.000Z');
   // 그 뒤에 다 지워져도 '한 번도 없었다' 로 돌아가지 않는다.
-  assert.equal(A.markMemorySeen(props, 0, '2026-09-01T00:00:00Z'), true);
-  assert.equal(props.getProperty('MEMORY_FIRST_SEEN'), '2026-08-09', '처음 본 날이 밀렸다');
+  assert.equal(A.markMemorySeen(props, 0, '2026-09-01T00:00:00.000Z'), true);
+  assert.equal(props.getProperty('MEMORY_FIRST_SEEN'), '2026-08-08T22:05:00.000Z',
+    '처음 본 때가 밀렸다');
+});
+
+test('writeStatus — 정리가 실패해도 상태 파일은 남는다', () => {
+  // ⚠️ 여기서 던지면 상태 파일과 시트가 통째로 안 써지고, runGuarded 의
+  //    catch 가 부르는 writeStatus 도 같은 자리에서 또 던진다. **"왜 아무
+  //    일도 안 일어나?" 를 진단할 파일 자체가 사라진다.**
+  const A = loadApp();
+  const env = fakeEnv({});
+  const folder = A.ensureFolder(env.drive, A.CFG.folderName);
+  const mem = folder.createFolder(A.CFG.memoryFolder);
+  mem.getFiles = () => { throw new Error('Service Drive is temporarily unavailable'); };
+
+  A.writeStatus(env, { ok: true, message: '처리 완료' });   // 던지면 여기서 끝난다
+  const status = JSON.parse(folder._get(A.CFG.statusName).getBlob().getDataAsString());
+  assert.equal(status.ok, true, '실행 결과가 정리 실패에 묻혔다');
+  assert.match(status.memoryError, /temporarily unavailable/);
 });
 
 test('writeStatus — 메모리를 한 번도 못 봤으면 상태에 적는다', () => {
@@ -877,14 +971,14 @@ test('writeStatus — 메모리를 한 번도 못 봤으면 상태에 적는다'
   const folder = env._root.getFoldersByName(A.CFG.folderName).next();
   const status = () => JSON.parse(folder._get(A.CFG.statusName).getBlob().getDataAsString());
   assert.equal(status().memoryNeverUsed, true);
-  assert.equal(status().memory.files, 0);
+  assert.equal(status().memory.memos, 0);
 
   // AI 가 한 번 쓰고 나면 사라진다.
   const mem = folder.getFoldersByName(A.CFG.memoryFolder).next();
   mem.createFile(fakeBlob('2026-08-09-목표.md', 'x'));
   A.writeStatus(env, { ok: true, message: '처리 완료' });
   assert.equal(status().memoryNeverUsed, undefined, '이미 봤는데 아직 never 라고 한다');
-  assert.equal(status().memory.files, 1);
+  assert.equal(status().memory.memos, 1);
 });
 
 test('pruneMemory — 메모리 폴더가 없으면 조용히 넘어간다', () => {

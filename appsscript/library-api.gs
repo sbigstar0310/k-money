@@ -63,9 +63,9 @@ function parseSheets(sheets) {
 /**
  * 집계 → Drive 에 올릴 facts 객체.
  * @param {Object} extract  parseSheets 결과
- * @param {Object} opts     { asOf: 'YYYY-MM-DD', profile: null }
- *   profile 은 지금 늘 null 이다. 개인화는 facts 에 싣지 않고
- *   `메모리/` 폴더의 마크다운으로 간다 — 숫자와 사람 말을 섞지 않는다.
+ * @param {Object} opts     { asOf: 'YYYY-MM-DD' }
+ *   개인화는 여기 안 실린다. `메모리/` 폴더의 마크다운으로 간다 —
+ *   숫자와 사람 말을 섞지 않는다 (DECISIONS §2-A15).
  */
 function buildFacts(extract, opts) {
   return KM.aggregate.build(extract, opts);

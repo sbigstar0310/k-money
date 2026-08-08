@@ -47,9 +47,10 @@ var KMApp = (function () {
     // 안 띄운다 — 굵은 칸 두 개는 '데이터가 멈췄다' 와 실행 결과의 자리고,
     // 주제가 좀 많은 건 그 둘을 밀어낼 만한 소식이 아니다.
     memoryMax: 40,
-    // 한 번에 휴지통으로 보낼 수 있는 최대 개수. **이 도구가 유저 것을 지우는
-    // 유일한 자리라서** 상한을 둔다. 묶기가 잘못돼 전부 한 주제로 뭉치는 날이
-    // 와도 피해가 여기서 멈추고, 다음 실행에서 이어 지운다.
+    // 한 번에 휴지통으로 보낼 수 있는 최대 개수. **setTrashed 하나가 드라이브
+    // 왕복 한 번**이고, 정리는 상태를 쓰기 **전에** 6분짜리 실행 예산 안에서
+    // 돈다. 상한이 없으면 파일이 수천 개인 폴더가 시간 초과로 죽으면서 상태
+    // 파일까지 못 쓰게 만든다. 남은 건 다음 실행에서 이어 지운다.
     memoryTrashBudget: 200,
     // 지난 기록은 '돈동생-YYYY-MM-DD.json'. 최신본과 접두사가 같으므로
     // 날짜 모양까지 봐야 한다 — 안 그러면 최신본을 히스토리로 세서 지운다.
@@ -151,7 +152,7 @@ var KMApp = (function () {
 
       // node 에서 검증한 그 코드.
       // 개인화는 메모리 폴더의 마크다운으로 간다 — facts 에 싣지 않는다.
-      var facts = KM.aggregate.build(KM.parse.extract(sheets), { asOf: stamp, profile: null });
+      var facts = KM.aggregate.build(KM.parse.extract(sheets), { asOf: stamp });
       facts.generatedAt = new Date().toISOString();
       facts.sourceMessageId = found.id;
 
@@ -573,89 +574,112 @@ var KMApp = (function () {
   //    AI 는 'YYYY-MM-DD-주제.md' 로 새 파일만 만든다 (이름이 안 부딪힌다).
   //    우리는 주제별로 묶어 **최신 하나만 남기고 나머지를 휴지통으로** 보낸다.
   //
-  //    내용은 읽지 않는다. 합치지도 않는다 — 그건 해석이고 우리 일이 아니다.
-  //    "3월엔 260만이라 했고 7월엔 300만이라 했는데 뭐가 맞나" 는 AI 가
-  //    새 파일을 쓸 때 정리할 문제다.
+  //    내용은 읽지 않는다. 합치지도 않는다 — 왜 그런지는 DECISIONS §2-A15.
 
-  /** 'YYYY-MM-DD[-HHMM]-주제.md' 에서 주제만. 규칙에 안 맞으면 null. */
+  /**
+   * 'YYYY-MM-DD[T14:30[:05]]-주제.md' 에서 주제만. 규칙에 안 맞으면 null.
+   *
+   * ⚠️ **`.md` 로 끝나야 한다.** 예전엔 확장자를 먼저 떼고 나머지를 검사해서,
+   *    `2026-08-09-카드명세.pdf` 가 '카드명세.pdf' 라는 주제로 잡혔다.
+   *    날짜를 앞에 붙여 정리해 둔 유저의 명세서·사진이 **날마다 하나씩
+   *    휴지통으로 갔다.** 여기가 이 도구에서 유저 파일을 지우는 유일한
+   *    자리라 규칙이 이름 전체를 덮어야 한다.
+   * ⚠️ **맨 시각(1430)은 안 받는다.** 받으면 '2026-08-09-2030-은퇴계획.md' 의
+   *    2030 을 20시 30분으로 읽어서 **2040-은퇴계획과 같은 주제가 된다** —
+   *    서로 다른 둘 중 하나가 지워진다. 시각은 `T` 나 공백이 앞에 붙어야
+   *    시각이다. 못 알아본 이름은 안 지워질 뿐이라 그 방향이 안전하다.
+   */
   function memoTopic(name) {
-    var base = String(name).replace(/\.md$/i, '');
-    var m = /^(\d{4}-\d{2}-\d{2})(?:[T\-_ ]\d{2}:?\d{2})?[-_ ](.+)$/.exec(base);
-    return m && m[2] ? m[2].trim() : null;
+    var m = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:?\d{2}(?::?\d{2})?)?[-_ ](.+)\.md$/i
+      .exec(String(name));
+    // 공백뿐인 주제는 '' 가 되는데, 계약은 null 이다. '' 를 흘리면
+    // === null 로 보는 다음 사람이 조용히 틀린다.
+    return (m && m[1].trim()) || null;
   }
 
   /**
    * 묶는 열쇠. **사람 눈에 같은 주제면 같은 열쇠가 나와야 한다.**
    *
-   * ⚠️ **한글은 같은 글자가 두 가지 바이트로 온다.** macOS 가 만든 파일 이름은
-   *    자모가 풀린 NFD('ㄱㅗㅁㅍㅛ')로 오고 AI 가 쓴 건 NFC('목표')로 온다.
-   *    눈으로는 똑같은데 문자열로는 다르다 — 묶지 않으면 둘 다 살아남아
-   *    다음 대화에서 AI 가 **서로 모순되는 파일 두 개**를 읽는다.
-   *    그건 우리가 이 폴더를 만든 이유의 정반대다.
+   * ⚠️ **한글은 같은 글자가 두 가지 바이트로 온다.** macOS 가 만든 이름은
+   *    자모가 풀려서(NFD) 오고 AI 가 쓴 건 NFC 로 온다. 눈으로는 똑같은데
+   *    문자열로는 달라서, 묶지 않으면 둘 다 살아남는다 — DECISIONS §2-A15.
+   *    NFKC 가 아니라 NFC 다. NFKC 는 전각·호환 문자까지 접어서 **서로 다른
+   *    주제를 실제로 합쳐 버린다.**
    */
   function topicKey(topic) {
     return String(topic).normalize('NFC').replace(/\s+/g, '').toLowerCase();
   }
 
+  /** 최신이 먼저. 같은 초면 이름이 큰 쪽(=나중 날짜)이 산다. */
+  function byNewest(a, b) {
+    return b.at - a.at || (a.name < b.name ? 1 : a.name > b.name ? -1 : 0);
+  }
+
   /**
    * 주제마다 최신 하나만 남긴다.
    *
-   * ⚠️ **순서는 파일 이름이 아니라 드라이브 생성 시각으로 본다.** AI 가 붙인
-   *    날짜는 시간대를 틀리거나 오늘이 며칠인지 몰라 어긋날 수 있다.
-   *    이름에서 가져오는 건 주제뿐이다.
-   * ⚠️ **규칙에 안 맞는 이름은 건드리지 않는다.** 유저가 직접 넣어 둔 파일을
-   *    우리가 지우면 안 된다.
+   * ⚠️ **순서는 드라이브 생성 시각으로 본다.** AI 가 붙인 날짜는 시간대를
+   *    틀리거나 오늘이 며칠인지 몰라 어긋난다. 이름은 동점일 때만 본다.
+   * ⚠️ **규칙에 안 맞는 이름은 건드리지 않는다.** 유저가 직접 넣어 둔
+   *    파일을 우리가 지우면 안 된다 (memoTopic 참고).
    * ⚠️ 영구 삭제가 아니라 휴지통이다. AI 가 잘못 갱신해도 30일 안에 되돌린다.
+   * ⚠️ **한 파일이 실패해도 나머지는 계속 치운다.** 공유 폴더에서는 남이
+   *    만든 파일에 setTrashed 가 'Access denied' 로 던진다. 그 하나 때문에
+   *    멈추면 그날부터 정리가 영영 안 된다.
    */
   function pruneMemory(folder) {
-    var it = folder.getFoldersByName(CFG.memoryFolder);
-    if (!it.hasNext()) return null;
-    var mem = it.next();
+    // ⚠️ **폴더도 이름이 겹칠 수 있다.** 파일과 같은 이유다 — 드라이브는
+    //    막지 않는다. 하나만 보면 나머지 '메모리' 는 영영 안 치워지고,
+    //    커넥터는 양쪽을 다 읽는다. 전부 모아서 한 번에 묶는다.
+    var folders = folder.getFoldersByName(CFG.memoryFolder);
+    if (!folders.hasNext()) return null;
 
-    // ⚠️ **{} 가 아니라 Object.create(null).** 평범한 객체는 'toString' ·
-    //    'constructor' 를 이미 갖고 있다. 파일 하나가 '2026-08-09-toString.md'
-    //    이면 `!byTopic[topic]` 이 거짓이라 배열을 안 만들고, 곧바로
-    //    함수에 .push 를 불러 **TypeError 로 실행 전체가 죽는다.**
+    // ⚠️ **{} 가 아니라 Object.create(null).** 평범한 객체는 'constructor' 를
+    //    이미 갖고 있다. 파일 하나가 '2026-08-09-constructor.md' 이면
+    //    `!byTopic[key]` 가 거짓이라 배열을 안 만들고, 곧바로 함수에 .push 를
+    //    불러 **TypeError 로 실행 전체가 죽는다.** ('toString' 으로는 재현이
+    //    안 된다 — topicKey 가 소문자로 접어서 'tostring' 이 되고 그건
+    //    프로토타입에 없다. 원래 소문자인 이름이라야 부딪힌다.)
     //    '__proto__' 는 더 조용하다 — 대입이 프로토타입을 갈아 끼워서
     //    Object.keys 에 안 잡히고 그 주제만 영영 안 치워진다.
     var byTopic = Object.create(null);
-    var matched = 0;
+    var memos = 0;
     var unnamed = 0;
 
-    var files = mem.getFiles();
-    while (files.hasNext()) {
-      var f = files.next();
-      var name = f.getName();
-      var topic = memoTopic(name);
-      if (!topic) { unnamed++; continue; }
-      matched++;
-      var key = topicKey(topic);
-      if (!byTopic[key]) byTopic[key] = [];
-      // getDateCreated() 는 드라이브 호출이다. 비교 함수 안에서 부르면
-      // 파일 하나를 정렬 내내 몇 번씩 다시 묻는다. 여기서 한 번만 본다.
-      byTopic[key].push({ file: f, at: f.getDateCreated().getTime(), name: name });
+    while (folders.hasNext()) {
+      var files = folders.next().getFiles();
+      while (files.hasNext()) {
+        var f = files.next();
+        var name = f.getName();
+        var topic = memoTopic(name);
+        if (!topic) { unnamed++; continue; }
+        memos++;
+        var key = topicKey(topic);
+        if (!byTopic[key]) byTopic[key] = [];
+        // getDateCreated() 는 드라이브 호출이다. 비교 함수 안에서 부르면
+        // 파일 하나를 정렬 내내 몇 번씩 다시 묻는다. 여기서 한 번만 본다.
+        byTopic[key].push({ file: f, at: f.getDateCreated().getTime(), name: name });
+      }
     }
 
     var keys = Object.keys(byTopic);
-    var trashed = 0;
-    var capped = false;
-    for (var k = 0; k < keys.length; k++) {
-      var list = byTopic[keys[k]].sort(function (a, b) {
-        // 같은 초에 만들어진 두 개는 이름이 큰 쪽(=나중 날짜)을 남긴다.
-        // 안 정하면 어느 쪽이 살지 실행마다 달라진다.
-        return b.at - a.at || (a.name < b.name ? 1 : a.name > b.name ? -1 : 0);
-      });
-      for (var i = 1; i < list.length; i++) {
-        if (trashed >= CFG.memoryTrashBudget) { capped = true; break; }
-        list[i].file.setTrashed(true);
-        trashed++;
-      }
-      if (capped) break;
-    }
+    var victims = [];
+    keys.forEach(function (k) {
+      var list = byTopic[k].sort(byNewest);
+      for (var i = 1; i < list.length; i++) victims.push(list[i].file);
+    });
 
-    var out = { topics: keys.length, trashed: trashed, files: matched };
+    var capped = victims.length > CFG.memoryTrashBudget;
+    var trashed = 0;
+    var failed = 0;
+    victims.slice(0, CFG.memoryTrashBudget).forEach(function (file) {
+      try { file.setTrashed(true); trashed++; } catch (e) { failed++; }
+    });
+
+    var out = { topics: keys.length, trashed: trashed, memos: memos };
     if (unnamed) out.unnamed = unnamed;
     if (capped) out.trashCapped = true;
+    if (failed) out.trashFailed = failed;
     return out;
   }
 
@@ -711,10 +735,14 @@ var KMApp = (function () {
    *    비어 있다. 상태 파일은 매일 덮여서 어제를 못 본다 — 그래서 여기서만
    *    가를 수 있다. "왜 기억을 못 해?" 를 받았을 때 볼 자리다.
    */
-  function markMemorySeen(props, files, at) {
+  function markMemorySeen(props, memos, at) {
     if (props.getProperty(PROP.memorySeen)) return true;
-    if (!files) return false;
-    props.setProperty(PROP.memorySeen, String(at).slice(0, 10));
+    if (!memos) return false;
+    // ⚠️ 잘라서 날짜만 남기지 않는다. at 은 UTC ISO 인데 앞 10자를 떼면
+    //    한국 시각 오전 9시 전에 도는 날은 **어제 날짜**가 박힌다.
+    //    (test/app.test.js 의 daysAgo 가 같은 이유로 toISOString 을 피한다.)
+    //    통째로 두면 자를 일이 없다.
+    props.setProperty(PROP.memorySeen, String(at));
     return true;
   }
 
@@ -724,11 +752,22 @@ var KMApp = (function () {
     // 첫 실행이 idle 이어도 안내는 있어야 한다 — 유저가 폴더를 먼저 열 수 있다.
     ensureAgentGuide(folder);
     ensureFolder(folder, CFG.memoryFolder);
-    var mem = pruneMemory(folder);
+    // ⚠️ **정리가 실패해도 상태는 남아야 한다.** 여기서 던지면 아래
+    //    putJson 과 시트 쓰기가 통째로 날아가고, runGuarded 의 catch 가
+    //    부르는 writeStatus 도 같은 자리에서 또 던진다 — 결국 **"왜 아무
+    //    일도 안 일어나?" 를 진단할 파일 자체가 안 써진다.** 청소부가
+    //    넘어진 것과 파이프라인이 선 것은 다른 사건이다.
+    var mem = null;
+    try {
+      mem = pruneMemory(folder);
+    } catch (e) {
+      result.memoryError = String(e && e.message || e).slice(0, 200);
+    }
     if (mem) {
       result.memory = mem;
       if (mem.topics > CFG.memoryMax) result.memoryOverflow = mem.topics;
-      if (!markMemorySeen(env.props, mem.files, result.at)) result.memoryNeverUsed = true;
+      var everUsed = markMemorySeen(env.props, mem.memos, result.at);
+      if (!everUsed) result.memoryNeverUsed = true;
     }
     putJson(folder, CFG.statusName, JSON.stringify(result, null, 2));
     writeStatusToSheet(env, result);
