@@ -68,7 +68,12 @@ var KMApp = (function () {
 
     var found = findAttachment(env, opts.force);
     if (!found) {
-      return { ok: true, step: 'idle', message: '처리할 새 메일이 없다.' };
+      // ⚠️ 아래 문구들은 **유저가 시트 첫 화면에서 매일 본다.**
+      //    제품 전체가 존댓말인데 여기만 반말이었고, 성공했을 때조차
+      //    다음에 뭘 하라는 말이 없었다. bytes 는 개발자용이라 뺐다
+      //    (status.json 에는 남는다).
+      return { ok: true, step: 'idle',
+        message: '새로 온 뱅크샐러드 메일이 없어요. 앱에서 「파일로 받기」를 눌러 주세요.' };
     }
 
     var folder = ensureFolder(env.drive, CFG.folderName);
@@ -95,7 +100,10 @@ var KMApp = (function () {
     for (var i = 0; i < files.length; i++) {
       if (files[i].getName().toLowerCase().indexOf('.xlsx') !== -1) { xlsx = files[i]; break; }
     }
-    if (!xlsx) return { ok: false, step: 'unzip', message: 'zip 안에 xlsx 가 없다.' };
+    if (!xlsx) {
+      return { ok: false, step: 'unzip',
+        message: '압축 안에 엑셀 파일이 없어요. 뱅크샐러드에서 다시 내보내 주세요.' };
+    }
 
     // 3) xlsx → Google Sheets. openpyxl 이식이 통째로 사라지는 지점이다.
     var tmpId = null;
@@ -146,9 +154,9 @@ var KMApp = (function () {
 
     return {
       ok: true, step: 'done',
-      message: '✅ ' + stamp + ' 처리 완료 — ' +
-               (facts.period ? facts.period.days + '일치' : '거래 0건') + ', ' +
-               json.length + ' bytes',
+      message: stamp + ' 까지 정리했어요' +
+               (facts.period ? ' (' + facts.period.days + '일치)' : ' (거래 0건)') +
+               '. 이제 AI에게 물어보세요.',
       generatedFor: stamp,
       bytes: json.length,
       flags: (facts.dataQuality && facts.dataQuality.flags || []).map(function (f) { return f.code; }),
@@ -158,7 +166,9 @@ var KMApp = (function () {
   /** 트리거가 부르는 것. 예외를 삼키지 않되 상태는 반드시 남긴다. */
   function runDaily(env) {
     // 트리거가 겹치거나 유저가 수동 실행을 같이 눌러도 두 번 돌지 않게 한다.
-    if (!env.lock.tryLock(10 * 1000)) return { ok: true, step: 'busy', message: '이미 실행 중이라 건너뛴다.' };
+    if (!env.lock.tryLock(10 * 1000)) {
+      return { ok: true, step: 'busy', message: '이미 실행 중이라 건너뜁니다.' };
+    }
     try {
       var result = process(env);
       writeStatus(env, result);
