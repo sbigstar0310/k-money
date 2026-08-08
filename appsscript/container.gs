@@ -183,11 +183,30 @@ function installDailyTrigger_() {
   ScriptApp.newTrigger('runDaily').timeBased().everyDays(1).atHour(7).create();
 }
 
-function menu_setup() { withUi_(function (env) { app_().menuSetup(env, installDailyTrigger_); }); }
-function menu_runNow() { withUi_(function (env) { app_().menuRunNow(env); }); }
-function menu_setPassword() { withUi_(function (env) { app_().menuSetPassword(env); }); }
-function menu_status() { withUi_(function (env) { app_().menuStatus(env); }); }
-function menu_version() { withUi_(function (env) { app_().menuVersion(env); }); }
+/**
+ * 메뉴 항목은 전부 이름만 넘기고 **동작은 라이브러리가 정한다.**
+ *
+ * ⚠️ Apps Script 는 메뉴 대상을 **문자열로** 찾으므로 이 이름들이 여기 있어야
+ *    한다. 그런데 이 파일은 사본에 복사되면 우리가 못 고친다 — 즉 **여기
+ *    없는 이름은 영원히 메뉴에 못 올린다.**
+ *
+ *    그래서 예비 슬롯을 미리 파 둔다. 앞으로 메뉴 항목이 필요하면 라이브러리의
+ *    menuSpec 이 slot1~3 을 집어 쓰면 되고, 라벨도 동작도 버전 갱신만으로
+ *    바뀐다. 예비가 없으면 항목 하나 추가하는 데 유저가 시트를 새로 떠야 한다.
+ */
+function menu_setup() { route_('menu_setup'); }
+function menu_runNow() { route_('menu_runNow'); }
+function menu_setPassword() { route_('menu_setPassword'); }
+function menu_status() { route_('menu_status'); }
+function menu_version() { route_('menu_version'); }
+function menu_ask() { route_('menu_ask'); }
+function menu_slot1() { route_('menu_slot1'); }
+function menu_slot2() { route_('menu_slot2'); }
+function menu_slot3() { route_('menu_slot3'); }
+
+function route_(key) {
+  withUi_(function (env) { app_().menu(env, key, installDailyTrigger_); });
+}
 
 /**
  * 메뉴에서 나는 예외는 **날 것으로 보이면 안 된다.**

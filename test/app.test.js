@@ -294,23 +294,25 @@ test('findAttachment — zip 이 아닌 첨부는 무시한다', () => {
 
 test('pruneFacts — 델타에 쓸 만큼만 남기고 오래된 것부터 지운다', () => {
   const A = loadApp();
-  const folder = fakeFolder('k-money');
+  const folder = fakeFolder(A.CFG.folderName);
   for (let i = 1; i <= A.CFG.keepFacts + 5; i++) {
-    A.putJson(folder, 'facts-2026-01-' + String(i).padStart(2, '0') + '.json', '{}');
+    A.putJson(folder, A.historyName('2026-01-' + String(i).padStart(2, '0')), '{}');
   }
-  A.putJson(folder, 'latest.json', '{}');
+  A.putJson(folder, A.CFG.latestName, '{}');
   A.pruneFacts(folder);
-  const names = [...folder._files.keys()].filter((n) => n.indexOf('facts-') === 0);
+  const names = [...folder._files.keys()].filter((n) => A.CFG.historyPattern.test(n));
   assert.equal(names.length, A.CFG.keepFacts);
-  assert.ok(folder._files.has('latest.json'), 'latest.json 을 지우면 안 된다');
-  assert.ok(!names.includes('facts-2026-01-01.json'), '오래된 것이 남아 있다');
+  // ⚠️ 최신본은 지난 기록과 접두사가 같다. 날짜 모양까지 안 보면 최신본을
+  //    히스토리로 세서 지운다.
+  assert.ok(folder._files.has(A.CFG.latestName), '최신본을 지우면 안 된다');
+  assert.ok(!names.includes(A.historyName('2026-01-01')), '오래된 것이 남아 있다');
 });
 
 test('readPrevious — 같은 날 두 번 내보내도 자기 자신과 비교하지 않는다', () => {
   const A = loadApp();
-  const folder = fakeFolder('k-money');
-  A.putJson(folder, 'facts-2026-06-01.json', JSON.stringify({ tag: 'old' }));
-  A.putJson(folder, 'facts-2026-06-10.json', JSON.stringify({ tag: 'today' }));
+  const folder = fakeFolder(A.CFG.folderName);
+  A.putJson(folder, A.historyName('2026-06-01'), JSON.stringify({ tag: 'old' }));
+  A.putJson(folder, A.historyName('2026-06-10'), JSON.stringify({ tag: 'today' }));
   const prev = A.readPrevious(folder, '2026-06-10');
   assert.equal(prev.tag, 'old');
 });
@@ -356,7 +358,7 @@ test('process — 비밀번호가 틀리면 유저가 할 일을 알려준다', 
   assert.doesNotMatch(r.message, /BANKSALAD_ZIP_PASSWORD/);
 });
 
-test('process — 끝까지 돌면 latest.json 과 원본 zip 이 남는다', () => {
+test('process — 끝까지 돌면 최신본과 원본 zip 이 남는다', () => {
   const sheets = {
     '가계부 내역': H.ledgerSheet([
       { day: '2026-05-01', kind: '지출', amount: 10000 },
@@ -382,13 +384,13 @@ test('process — 끝까지 돌면 latest.json 과 원본 zip 이 남는다', ()
   assert.equal(r.ok, true, r.message);
   assert.equal(r.step, 'done');
 
-  const folder = env._root.getFoldersByName('k-money').next();
-  assert.ok(folder._files.has('latest.json'), 'latest.json 이 없다');
-  assert.ok(folder._files.has('facts-2026-06-11.json'));
+  const folder = env._root.getFoldersByName(A.CFG.folderName).next();
+  assert.ok(folder._files.has(A.CFG.latestName), A.CFG.latestName + ' 이 없다');
+  assert.ok(folder._files.has(A.historyName('2026-06-11')));
   const raw = folder.getFoldersByName('raw').next();
   assert.ok(raw._files.has('2026-06-11.zip'), '원본 zip 을 안 남겼다');
 
-  const facts = JSON.parse(folder._files.get('latest.json').getBlob().getDataAsString());
+  const facts = JSON.parse(folder._files.get(A.CFG.latestName).getBlob().getDataAsString());
   assert.ok(facts.period, 'period 가 없다');
 
   // ⚠️ 메일 수신일(6/11)이 아니라 거래 마지막 날(6/10)이어야 한다.
@@ -415,9 +417,9 @@ test('process — 두 번 돌려도 같은 날 파일이 늘어나지 않는다'
     },
   });
   A.process(env, { force: true });
-  const after1 = env._root.getFoldersByName('k-money').next()._files.size;
+  const after1 = env._root.getFoldersByName(A.CFG.folderName).next()._files.size;
   A.process(env, { force: true });
-  const after2 = env._root.getFoldersByName('k-money').next()._files.size;
+  const after2 = env._root.getFoldersByName(A.CFG.folderName).next()._files.size;
   assert.equal(after2, after1, '같은 날인데 파일이 늘었다');
 });
 
@@ -435,8 +437,8 @@ test('runDaily — 예외가 나도 상태를 남기고 던진다', () => {
   });
   assert.throws(() => A.runDaily(env), /Gmail 폭발/);
   // 무인 실행이라 예외를 삼키면 아무도 모른다. Drive 에는 남아야 한다.
-  const folder = env._root.getFoldersByName('k-money').next();
-  const status = JSON.parse(folder._files.get('status.json').getBlob().getDataAsString());
+  const folder = env._root.getFoldersByName(A.CFG.folderName).next();
+  const status = JSON.parse(folder._files.get(A.CFG.statusName).getBlob().getDataAsString());
   assert.equal(status.ok, false);
   assert.match(status.message, /Gmail 폭발/);
 });

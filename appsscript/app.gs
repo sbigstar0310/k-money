@@ -32,9 +32,20 @@ var KMApp = (function () {
 
   var CFG = {
     gmailQuery: 'has:attachment filename:zip (뱅크샐러드 OR banksalad)',
-    folderName: 'k-money',
+
+    // ⚠️ **이름이 유저의 어휘여야 한다.** 예전엔 k-money/latest.json 이었는데,
+    //    유저가 자연스럽게 쓸 말('돈', '가계부', '소비')이 한 글자도 없어서
+    //    커넥터가 찾으려면 유저가 정확한 파일명을 외워 불러줘야 했다.
+    //    "k-money 폴더의 latest.json 보고 알려줘" 는 안내가 아니라 주문이다.
+    folderName: '돈동생',
     rawFolderName: 'raw',
-    keepFacts: 12,        // facts-*.json 보관 개수. 델타 계산에 히스토리가 필요하다
+    latestName: '돈동생-최신.json',
+    statusName: '돈동생-상태.json',
+    profileName: '내정보.json',
+    // 지난 기록은 '돈동생-YYYY-MM-DD.json'. 최신본과 접두사가 같으므로
+    // 날짜 모양까지 봐야 한다 — 안 그러면 최신본을 히스토리로 세서 지운다.
+    historyPattern: /^돈동생-\d{4}-\d{2}-\d{2}\.json$/,
+    keepFacts: 12,        // 지난 기록 보관 개수. 델타 계산에 히스토리가 필요하다
     searchThreads: 10,
     processedKeep: 50,    // 중복 처리 방지용 메시지 ID 보관 개수
     staleDays: 14,        // 이만큼 새 데이터가 없으면 시트 첫 화면에서 경고한다
@@ -71,7 +82,7 @@ var KMApp = (function () {
       // ⚠️ 아래 문구들은 **유저가 시트 첫 화면에서 매일 본다.**
       //    제품 전체가 존댓말인데 여기만 반말이었고, 성공했을 때조차
       //    다음에 뭘 하라는 말이 없었다. bytes 는 개발자용이라 뺐다
-      //    (status.json 에는 남는다).
+      //    (상태 파일에는 남는다).
       return { ok: true, step: 'idle',
         message: '새로 온 뱅크샐러드 메일이 없어요. 앱에서 「파일로 받기」를 눌러 주세요.' };
     }
@@ -121,11 +132,11 @@ var KMApp = (function () {
       });
 
       // 4) 집계 — node 에서 검증한 그 코드
-      // profile.json 은 LLM 이 대화로 채운다. 없어도 정상 동작한다.
+      // 내정보.json 은 유저가 직접 올린다. 없어도 정상 동작한다.
       var extract = KM.parse.extract(sheets);
       facts = KM.aggregate.build(extract, {
         asOf: stamp,
-        profile: readJson(folder, 'profile.json'),
+        profile: readJson(folder, CFG.profileName),
       });
       facts.generatedAt = new Date().toISOString();
       facts.sourceMessageId = found.id;
@@ -141,8 +152,8 @@ var KMApp = (function () {
 
     // 5) 저장 — latest 는 고정 이름이라 커넥터가 찾기 쉽다
     var json = JSON.stringify(facts, null, 2);
-    putJson(folder, 'facts-' + stamp + '.json', json);
-    putJson(folder, 'latest.json', json);
+    putJson(folder, historyName(stamp), json);
+    putJson(folder, CFG.latestName, json);
     pruneFacts(folder);
 
     markProcessed(props, found.id);
@@ -262,12 +273,16 @@ var KMApp = (function () {
 
   /**
    * stamp 보다 앞선 것 중 가장 최근 facts.
-   * latest.json 을 그냥 쓰면 같은 날 두 번 내보냈을 때 자기 자신과 비교하게 된다.
+   * 최신본을 그냥 쓰면 같은 날 두 번 내보냈을 때 자기 자신과 비교하게 된다.
    */
+  function historyName(stamp) {
+    return '돈동생-' + stamp + '.json';
+  }
+
   function readPrevious(folder, stamp) {
     var names = factNames(folder);
     names.sort().reverse();
-    var current = 'facts-' + stamp + '.json';
+    var current = historyName(stamp);
     for (var i = 0; i < names.length; i++) {
       if (names[i] < current) return readJson(folder, names[i]);
     }
@@ -279,7 +294,7 @@ var KMApp = (function () {
     var it = folder.getFiles();
     while (it.hasNext()) {
       var n = it.next().getName();
-      if (n.indexOf('facts-') === 0 && n.indexOf('.json') !== -1) names.push(n);
+      if (CFG.historyPattern.test(n)) names.push(n);
     }
     return names;
   }
@@ -340,7 +355,7 @@ var KMApp = (function () {
   function writeStatus(env, result) {
     result.at = new Date().toISOString();
     var folder = ensureFolder(env.drive, CFG.folderName);
-    putJson(folder, 'status.json', JSON.stringify(result, null, 2));
+    putJson(folder, CFG.statusName, JSON.stringify(result, null, 2));
     writeStatusToSheet(env, result);
   }
 
@@ -381,16 +396,66 @@ var KMApp = (function () {
 
   // ── 메뉴 동작 ────────────────────────────────────────────────────
 
-  /** 메뉴 구성. 컨테이너가 이 목록대로 만든다. */
+  /**
+   * 메뉴 구성. 컨테이너가 이 목록대로 만든다.
+   *
+   * ⚠️ handler 는 **컨테이너에 실제로 있는 함수 이름**이어야 한다. Apps Script 가
+   *    문자열로 찾기 때문이다. 컨테이너는 우리가 못 고치므로, 여기서 쓸 수 있는
+   *    이름은 이미 정해져 있다 — menu_setup·menu_runNow·menu_setPassword·
+   *    menu_status·menu_version·menu_ask, 그리고 예비 menu_slot1~3.
+   *
+   *    항목을 새로 만들 때는 **예비 슬롯을 쓴다.** 그러면 라벨도 동작도 라이브러리
+   *    갱신만으로 바뀐다. 예비를 다 쓰면 그때는 컨테이너를 고쳐야 하고,
+   *    그건 이미 설치한 사람에게 닿지 않는다.
+   */
   function menuSpec() {
     return [
       { label: '① 처음 설정하기', handler: 'menu_setup' },
       { label: '② 지금 한 번 돌리기', handler: 'menu_runNow' },
       { separator: true },
-      { label: '비밀번호 다시 넣기', handler: 'menu_setPassword' },
+      { label: '🤖 AI에게 물어보기', handler: 'menu_ask' },
       { label: '상태 보기', handler: 'menu_status' },
+      { separator: true },
+      { label: '비밀번호 다시 넣기', handler: 'menu_setPassword' },
       { label: '버전 보기', handler: 'menu_version' },
     ];
+  }
+
+  /**
+   * 컨테이너가 메뉴 클릭을 전부 여기로 넘긴다.
+   * 동작을 라이브러리가 쥐고 있어야 나중에 고칠 수 있다.
+   */
+  function menu(env, key, installTrigger) {
+    if (key === 'menu_setup') return menuSetup(env, installTrigger);
+    if (key === 'menu_runNow') return menuRunNow(env);
+    if (key === 'menu_setPassword') return menuSetPassword(env);
+    if (key === 'menu_status') return menuStatus(env);
+    if (key === 'menu_version') return menuVersion(env);
+    if (key === 'menu_ask') return menuAsk(env);
+    // 예비 슬롯은 아직 쓰이지 않는다. 메뉴에 없으므로 눌릴 일도 없다.
+    env.ui.alert('아직 준비 중이에요', '이 항목은 다음 버전에서 동작합니다.', env.ui.ButtonSet.OK);
+  }
+
+  /**
+   * ⚠️ **유저는 우리 파일 이름을 외울 이유가 없다.**
+   *    예전 안내는 "k-money 폴더의 latest.json 보고 알려줘" 였다. 폴더도
+   *    파일명도 우리 구현이지 유저의 어휘가 아니다. 그래서 이름을 한국어로
+   *    바꾸고, 그마저도 외우지 않게 문장을 통째로 준다.
+   */
+  function menuAsk(env) {
+    env.ui.alert('AI에게 물어보기',
+      '① 쓰시는 AI에 구글 드라이브를 연결해 두세요.\n' +
+      '    Claude: 설정 → 커넥터\n' +
+      '    ChatGPT: 설정 → 앱(Apps)\n' +
+      '    Gemini: 설정 및 도움말 → 연결된 앱\n\n' +
+      '② 이렇게 물어보세요.\n\n' +
+      '    돈동생 파일 보고 이번 달 내 소비 어땠는지 알려줘\n\n' +
+      '한 번 읽고 나면 그다음부터는 짧게 물어도 알아들어요.\n' +
+      '    "이번 달 왜 많이 썼어?"\n' +
+      '    "매달 똑같이 나가는 돈이 얼마야?"\n\n' +
+      '구독이 없으면 내 드라이브의 ' + CFG.folderName + ' 폴더에서\n' +
+      CFG.latestName + ' 를 받아 대화창에 끌어다 놓으셔도 됩니다. 결과는 같아요.',
+      env.ui.ButtonSet.OK);
   }
 
   function menuSetup(env, installTrigger) {
@@ -442,7 +507,7 @@ var KMApp = (function () {
 
   function menuRunNow(env) {
     var ui = env.ui;
-    // 아침 7시 트리거와 겹칠 수 있다. 겹치면 임시 시트가 둘, latest.json 쓰기가
+    // 아침 7시 트리거와 겹칠 수 있다. 겹치면 임시 시트가 둘, 최신본 쓰기가
     // 둘이 되고 pruneFacts 가 서로가 쓰는 걸 지운다.
     if (!env.lock.tryLock(10 * 1000)) {
       ui.alert('잠시만요', '지금 자동 실행이 돌고 있어요. 1분 뒤에 다시 눌러 주세요.', ui.ButtonSet.OK);
@@ -465,7 +530,7 @@ var KMApp = (function () {
     var ui = env.ui;
     // 상태를 '보는' 동작이 폴더를 만들면 안 된다. 없으면 없는 대로 답한다.
     var it = env.drive.getFoldersByName(CFG.folderName);
-    var s = it.hasNext() ? readJson(it.next(), 'status.json') : null;
+    var s = it.hasNext() ? readJson(it.next(), CFG.statusName) : null;
     var hintValue = env.props.getProperty(PROP.passwordHint);
     ui.alert('상태',
       // 신선도가 먼저다. '마지막 실행' 은 내보내기를 그만둬도 매일 갱신된다.
@@ -541,8 +606,9 @@ var KMApp = (function () {
     dataAge: dataAge, freshnessLine: freshnessLine, isStale: isStale,
     writeStatus: writeStatus, writeStatusToSheet: writeStatusToSheet,
     safeCell: safeCell, localTime: localTime, hint: hint,
-    menuSpec: menuSpec, menuSetup: menuSetup, menuSetPassword: menuSetPassword,
+    menuSpec: menuSpec, menu: menu, menuSetup: menuSetup, menuSetPassword: menuSetPassword,
     menuRunNow: menuRunNow, menuStatus: menuStatus, menuVersion: menuVersion,
+    menuAsk: menuAsk, historyName: historyName,
     versionText: versionText,
   };
 })();

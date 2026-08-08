@@ -1,4 +1,5 @@
 {
+  "title": "돈동생 가계 요약 · 2025-07-01 ~ 2026-06-28",
   "schema": "k-money/facts@2",
   "source": "banksalad/v1",
   "generatedFor": "2026-06-30",

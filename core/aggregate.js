@@ -85,6 +85,12 @@ KM.aggregate = (function () {
     var reportedSpikes = spikeCut.shown;
 
     var out = {
+      // ⚠️ 사람이 읽는 제목. **분기하지 마라** — 이 값으로 조건을 걸면
+      //    문구를 고치는 순간 계약이 깨진다 (그래서 Kind 같은 건 ASCII 다).
+      //    여기 한국어를 넣는 이유는 하나뿐이다: 커넥터가 **내용으로**
+      //    검색할 때 걸리게 하려고. 유저는 "돈동생" 이나 "가계" 라고 말하지
+      //    "facts@2" 라고 말하지 않는다.
+      title: title(txns),
       schema: SCHEMA,
       source: extract.source,
       generatedFor: opts.asOf || (monthly.length ? monthly[monthly.length - 1].month : null),
@@ -182,6 +188,11 @@ KM.aggregate = (function () {
 
     out.hints = HINTS;
     return out;
+  }
+
+  function title(txns) {
+    var p = period(txns);
+    return p ? '돈동생 가계 요약 · ' + p.from + ' ~ ' + p.to : '돈동생 가계 요약';
   }
 
   function period(txns) {

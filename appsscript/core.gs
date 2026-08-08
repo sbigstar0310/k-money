@@ -979,7 +979,8 @@ KM.parse = (function () {
 /**
  * 유저 컨텍스트 — 대화로 쌓이는 것.
  *
- * `Drive/k-money/profile.json`. **LLM이 대화 중에 쓴다.** 유저가 JSON을
+ * `Drive/돈동생/내정보.json`. **유저가 직접 올린다** (드라이브 커넥터는 대개
+ * 읽기 전용이라 LLM 이 쓸 수 없다). 유저가 JSON을
  * 손으로 고치는 일은 없어야 한다 — 타겟이 사회 초년생이다.
  *
  * ━━ 진술은 관측을 이기지 않는다 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1165,6 +1166,12 @@ KM.aggregate = (function () {
     var reportedSpikes = spikeCut.shown;
 
     var out = {
+      // ⚠️ 사람이 읽는 제목. **분기하지 마라** — 이 값으로 조건을 걸면
+      //    문구를 고치는 순간 계약이 깨진다 (그래서 Kind 같은 건 ASCII 다).
+      //    여기 한국어를 넣는 이유는 하나뿐이다: 커넥터가 **내용으로**
+      //    검색할 때 걸리게 하려고. 유저는 "돈동생" 이나 "가계" 라고 말하지
+      //    "facts@2" 라고 말하지 않는다.
+      title: title(txns),
       schema: SCHEMA,
       source: extract.source,
       generatedFor: opts.asOf || (monthly.length ? monthly[monthly.length - 1].month : null),
@@ -1262,6 +1269,11 @@ KM.aggregate = (function () {
 
     out.hints = HINTS;
     return out;
+  }
+
+  function title(txns) {
+    var p = period(txns);
+    return p ? '돈동생 가계 요약 · ' + p.from + ' ~ ' + p.to : '돈동생 가계 요약';
   }
 
   function period(txns) {

@@ -171,11 +171,22 @@ test('트리거와 메뉴가 이름으로 참조하는 함수가 전부 있다',
   // 이미 설치된 유저의 트리거가 'runDaily' 를 문자열로 가리키고 있다.
   // 이름을 바꾸면 그 사람들의 자동 실행이 조용히 멈춘다.
   ['onOpen', 'runDaily', 'menu_setup', 'menu_runNow', 'menu_setPassword',
-    'menu_status', 'menu_version'].forEach((fn) => {
+    'menu_status', 'menu_version', 'menu_ask',
+    'menu_slot1', 'menu_slot2', 'menu_slot3'].forEach((fn) => {
     assert.match(CODE, new RegExp('function\\s+' + fn + '\\s*\\('), fn + ' 이 없다');
   });
   // 문자열은 CODE 에서 지워지므로 원문에서 본다.
   assert.match(SRC, /newTrigger\(\s*'runDaily'\s*\)/, '트리거 핸들러 이름이 바뀌었다');
+});
+
+test('앞으로 쓸 메뉴 슬롯이 남아 있다', () => {
+  // 컨테이너는 사본에 복사되면 못 고친다. 여기 없는 이름은 영원히 메뉴에
+  // 못 올린다 — 항목 하나 추가하려고 유저에게 시트를 새로 뜨라고 할 수는 없다.
+  const A = require('fs').readFileSync(path.join(ROOT, 'appsscript', 'app.gs'), 'utf8');
+  const declared = [...CODE.matchAll(/function (menu_\w+)\(/g)].map((m) => m[1]);
+  const used = [...A.matchAll(/handler: '(menu_\w+)'/g)].map((m) => m[1]);
+  const spare = declared.filter((n) => used.indexOf(n) === -1);
+  assert.ok(spare.length >= 2, '예비 슬롯이 ' + spare.length + '개뿐이다: ' + spare.join(', '));
 });
 
 test('withUi_ — 메뉴에서 난 예외를 날 것으로 보여주지 않는다', () => {
