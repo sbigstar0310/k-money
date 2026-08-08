@@ -16,7 +16,8 @@ var TEMPLATE_CHECKED_CELL = 'B11';
 // ⚠️ **rows 배열에 줄을 끼워 넣지 마라.** 아래 서식과 위 상수가 전부 행 번호로
 //    박혀 있고, app.gs 도 같은 칸에 쓴다. 한 줄만 밀어도 상태가 엉뚱한
 //    칸에 찍히는데 **오류는 안 난다** — 유저 화면은 영영 첫 문구 그대로 남는다.
-//    할 말이 생기면 줄을 늘리지 말고 기존 줄에 붙여라.
+//    **상태 칸 아래(자주 묻는 것)는 늘려도 된다.** 위쪽만 건드리지 마라.
+//    테스트가 '지금 상태' 머리글이 상태 칸 바로 위에 있는지 확인한다.
 
 function template_build() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -44,8 +45,9 @@ function template_build() {
     ['', ''],
     ['', '자주 묻는 것'],
     ['', '· 데이터는 어디 있나요 —  내 구글 드라이브의 k-money 폴더, 나만 볼 수 있어요. 서버로 안 갑니다.'],
-    ['', '· 뭘 물어보면 되나요 —  그 폴더의 latest.json 을 받아서 Claude·ChatGPT 창에'],
-    ['', '   끌어다 놓고 "이번 달 내 소비 어땠어?" 라고 해보세요. 무료 계정도 됩니다.'],
+    ['', '· 뭘 물어보면 되나요 —  Claude·ChatGPT 설정에서 구글 드라이브를 연결한 뒤'],
+    ['', '   "k-money 폴더의 latest.json 보고 이번 달 어땠는지 알려줘" 라고 해보세요.'],
+    ['', '   구독이 없으면 그 파일을 받아서 대화창에 끌어다 놓으셔도 됩니다. 결과는 같아요.'],
     ['', '· 비밀번호를 잘못 넣었어요 —  메뉴에서 "비밀번호 다시 넣기" 를 누르세요.'],
     ['', '· 그만두려면 —  이 시트를 지우면 자동 실행도 멈춥니다.'],
   ];
@@ -64,7 +66,7 @@ function template_build() {
   // 여기를 안 하면 트리거는 매일 성공하는데 데이터가 영영 안 들어온다.
   sh.getRange('B5:B7').setFontSize(11).setFontColor('#374151');
   sh.getRange('B6').setFontWeight('bold').setFontColor('#111827');
-  sh.getRange('B14:B18').setFontSize(10).setFontColor('#6b7280');
+  sh.getRange('B14:B19').setFontSize(10).setFontColor('#6b7280');
 
   // 상태 칸 — 눈에 띄게
   sh.getRange('B10:B11').setFontSize(11).setFontColor('#374151')
