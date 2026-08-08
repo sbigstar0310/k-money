@@ -8,10 +8,17 @@ client_secret*.json
 
 # 개인 금융 데이터 — 절대 커밋 금지
 data/
+# 시트를 그대로 뜬 테스트 픽스처 — 실거래 전량이 들어 있다
+fixtures/
+# 로컬에서 만든 산출물
+out/
 *.zip
 *.xlsx
 *.xls
 *.csv
+
+# Node
+node_modules/
 
 # Python
 __pycache__/
