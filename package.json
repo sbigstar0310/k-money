@@ -6,9 +6,17 @@
   "scripts": {
     "test": "node --test test/",
     "build": "node scripts/build-gs.js",
-    "check": "node scripts/build-gs.js && node scripts/gen-agent-guide.js && node --test test/",
+    "check": "node scripts/build-gs.js && node scripts/gen-agent-guide.js && node scripts/make-sample.js && node --test test/",
     "run:local": "node scripts/run-local.js",
-    "version": "node scripts/stamp-version.js && node scripts/build-gs.js && git add VERSION README.md appsscript/core.gs appsscript/container.gs"
+    "version": "node scripts/stamp-version.js && node scripts/build-gs.js && git add VERSION README.md appsscript/core.gs appsscript/container.gs",
+    "release:impact": "node scripts/impact.js",
+    "release:build": "node scripts/build-deploy.js",
+    "release:library": "node scripts/deploy.js --library",
+    "release:template": "node scripts/deploy.js --template",
+    "release:login": "node scripts/deploy-login.js",
+    "release:record": "node scripts/record-deploy.js",
+    "release:verify": "node scripts/verify-release.js",
+    "release:preflight": "node scripts/deploy.js --preflight"
   },
   "engines": {
     "node": ">=20"

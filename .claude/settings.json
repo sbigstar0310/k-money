@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(//Users/*/.config/k-money/**)",
+      "Read(./secrets/**)",
+      "Bash(cat:*deploy.json*)",
+      "Bash(cat:*client_secret*)",
+      "Bash(cat:*gmail_token*)"
+    ],
+    "allow": [
+      "Bash(npm run check)",
+      "Bash(npm test)",
+      "Bash(npm run release:*)",
+      "Bash(node scripts/*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git tag:*)",
+      "Bash(git fetch:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git rev-list:*)",
+      "Bash(git describe:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git push origin main)",
+      "Bash(git push origin v*)",
+      "Bash(gh auth status)",
+      "Bash(gh release create:*)",
+      "Bash(gh run list:*)"
+    ]
+  }
+}
