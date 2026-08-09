@@ -225,9 +225,23 @@ async function deployLibrary(token, cfg, description, opts) {
     .map(function (f) { return f.replace(/\.gs$/, ''); }).concat(['appsscript']).sort();
   const remote = (before.files || []).map(function (f) { return f.name; }).sort();
   if (JSON.stringify(expected) !== JSON.stringify(remote)) {
-    throw new Error('원격 라이브러리의 파일 목록이 예상과 다르다.\n' +
-      '  예상: ' + expected.join(' ') + '\n  실제: ' + remote.join(' ') + '\n' +
-      '  편집기에서 누가 고쳤다는 뜻이다. 그대로 올리면 그 파일이 조용히 지워진다.');
+    const gone = remote.filter(function (n) { return expected.indexOf(n) === -1; });
+    const born = expected.filter(function (n) { return remote.indexOf(n) === -1; });
+    const delta = '  지워짐: ' + (gone.join(' ') || '(없음)') +
+      '\n  새로 생김: ' + (born.join(' ') || '(없음)');
+
+    // ⚠️ 이 우회는 **이름이 바뀌는 걸 사람이 알고 승인했을 때만** 쓴다.
+    //    처음 배포 때 실제로 걸렸다 — 원격이 `libraryApi`, 저장소가
+    //    `library-api` 였다. 손으로 붙여넣을 때 다르게 이름 지은 흔적이고,
+    //    검사가 없었으면 하나가 조용히 지워졌을 것이다.
+    if (!opts || !opts.allowFileRename) {
+      throw new Error('원격 라이브러리의 파일 목록이 예상과 다르다.\n' +
+        '  예상: ' + expected.join(' ') + '\n  실제: ' + remote.join(' ') + '\n' + delta +
+        '\n  편집기에서 누가 고쳤다는 뜻이다. 그대로 올리면 그 파일이 조용히 지워진다.' +
+        '\n  이름을 저장소에 맞추려는 것이면 --allow-file-rename 을 명시해라.');
+    }
+    console.log('⚠️ 원격 파일 목록을 저장소에 맞춘다 (--allow-file-rename)');
+    console.log(delta);
   }
 
   // 스냅샷이 없으면 **대조가 통째로 꺼진다.** 꺼진 줄 모르고 도는 게 최악이라
@@ -368,7 +382,8 @@ async function main() {
     const desc = i === -1 ? 'v' + fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').trim()
       : argv[i + 1];
     const out = await deployLibrary(token, cfg, desc,
-      { allowMissingSnapshot: argv.includes('--allow-missing-snapshot') });
+      { allowMissingSnapshot: argv.includes('--allow-missing-snapshot'),
+        allowFileRename: argv.includes('--allow-file-rename') });
     console.log('→ 라이브러리 ' + out.files + '개 파일, 배포 버전 ' + out.version +
       ' (' + out.deploymentId + ')');
     console.log('→ 되읽기 대조 통과');
