@@ -12,6 +12,8 @@ data/
 fixtures/
 # 로컬에서 만든 산출물
 out/
+# 로컬 전용 메모 — 조사 결과·초안. 공개 문서는 docs/ 로 옮긴다
+local_docs/
 *.zip
 *.xlsx
 *.xls
