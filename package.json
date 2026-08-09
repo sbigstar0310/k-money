@@ -1,6 +1,6 @@
 {
   "name": "k-money",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "돈동생 — 집계 코어. node 와 Apps Script 양쪽에서 같은 코드가 돈다.",
   "private": true,
   "scripts": {
