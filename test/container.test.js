@@ -498,17 +498,15 @@ test('install.md 스코프 표가 매니페스트와 정확히 같다', () => {
   assert.deepEqual(rows, short);
 });
 
-test('install.md 의 비상 복구 안내가 배포 파일을 다 부른다', () => {
-  // "프로젝트가 멈추면" 을 위한 유일한 안내다. 한 파일이라도 빠지면
-  // 유저는 절반만 붙여넣고 중간에서 멈춘다. 실제로 zipcrypto.gs 가 빠져 있었다.
-  const md = fs.readFileSync(path.join(ROOT, 'docs', 'install.md'), 'utf8');
-  const head = md.indexOf('되살리려면');
-  assert.notEqual(head, -1, 'install.md 에서 복구 안내를 못 찾았다');
-  const para = md.slice(head, head + 400);
-  DEPLOYED.filter((f) => f !== 'container.gs').forEach((f) => {
-    assert.ok(para.indexOf(f) !== -1, f + ' 이 복구 안내에 없다');
-  });
-});
+// ⛔ 2026-08-09 삭제 — `install.md 의 비상 복구 안내가 배포 파일을 다 부른다`
+//
+//    "이 프로젝트가 멈추면" 절이 install.md 에서 의도적으로 빠졌다. 라이브러리가
+//    사라졌을 때 `core.gs`·`zipcrypto.gs`·`app.gs`·`library-api.gs` 네 개를 직접
+//    붙여넣어 되살리는 안내였고, 이 테스트는 그중 하나라도 빠지는 걸 막았다
+//    (실제로 zipcrypto.gs 가 빠져 있었다).
+//
+//    **되살릴 거면 테스트도 같이 되살려라.** 안내만 다시 쓰면 파일 하나가 빠져도
+//    아무도 모른다 — 그게 원래 이 테스트가 있던 이유다.
 
 test('승인 화면 문구 표가 스코프 개수와 맞는다', () => {
   // 유저는 스코프 문자열이 아니라 한국어 문구를 본다. 두 표가 어긋나면
