@@ -5,6 +5,10 @@ secrets/
 *.credentials.json
 token.json
 client_secret*.json
+# 배포 토큰. 원래는 ~/.config/k-money/ 에 있지만, 디버깅하다 저장소로
+# 복사하는 일이 실제로 일어난다. 그 한 번이 공개 저장소로 나가면 끝이다.
+deploy.json
+*deploy.json
 
 # 개인 금융 데이터 — 절대 커밋 금지
 data/
@@ -29,6 +33,7 @@ __pycache__/
 venv/
 *.egg-info/
 dist/
+# 배포 빌드 산물 (scripts/build-deploy.js)
 build/
 .pytest_cache/
 .ruff_cache/

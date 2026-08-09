@@ -28,10 +28,17 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const SAMPLE = 'docs/sample-latest.json';
 
-/** 배포되는 것들. 여기가 안 바뀌면 유저 쪽에서 도는 코드는 그대로다. */
-const LIBRARY = ['appsscript/core.gs', 'appsscript/app.gs',
-  'appsscript/library-api.gs', 'appsscript/zipcrypto.gs'];
-const TEMPLATE = ['appsscript/container.gs', 'appsscript/appsscript.json'];
+/*
+ * 배포되는 것들. 여기가 안 바뀌면 유저 쪽에서 도는 코드는 그대로다.
+ *
+ * ⚠️ 목록을 여기 또 적지 않는다. 이중화하면 `build-deploy.js` 에 파일을
+ *    추가하고 여기를 안 고쳐도 **테스트가 전부 초록이고 등급만 낮아진다** —
+ *    새 파일만 바뀐 릴리스가 "배포되는 파일이 하나도 안 바뀌었다 → ⚪" 로 나간다.
+ */
+const TARGETS = require('./build-deploy').TARGETS;
+const LIBRARY = TARGETS.library.files.map(function (f) { return 'appsscript/' + f; });
+const TEMPLATE = TARGETS.template.files.concat([TARGETS.template.manifest])
+  .map(function (f) { return 'appsscript/' + f; });
 
 function git(args) {
   return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
@@ -77,8 +84,18 @@ function flatten(node, prefix, out) {
  * 이걸 안 걸러내면 아무것도 안 고친 날에도 🔴 가 뜨고, **매번 뜨는 경보는
  * 곧 안 보는 경보가 된다.** 등급을 측정으로 바꾸려는 시도 자체가 죽는다.
  */
+/*
+ * ⚠️ **좁게 잡아라.** 처음엔 `/^period\./` 로 뭉뚱그렸는데, 그건
+ *    `period.days` 까지 삼킨다. 이 저장소 최악의 버그(라이브러리 경계에서
+ *    `instanceof Date` 가 안 넘어가 **84개월짜리 산출물**이 나온 것)의 관측
+ *    지표가 정확히 그 값이었다 — `366일 → 175일`. 그 사고가 오늘 다시 나면
+ *    필터가 조용히 지운다. 잡음 필터는 신호를 삼키는 순간 가치가 음수가 된다.
+ *
+ *    `source` 는 지금 문자열이라 `/^source\./` 가 아무것도 안 잡는다. 죽은
+ *    규칙은 다음 사람이 그 필드를 객체로 바꾸는 순간 조용히 발효되므로 뺐다.
+ */
 const NOISE = [/^generatedFor$/, /^generatedAt$/, /^receivedOn$/, /^sourceMessageId$/,
-  /^period\./, /^source\./];
+  /^period\.(from|to)$/];
 
 /**
  * 유저가 보는 **숫자**가 아니라 AI 에게 주는 **설명문**인 자리.
@@ -184,7 +201,13 @@ function suggest(ev) {
     grade = '🟡';
   }
   if (ev.library.length && grade === '⚪') {
-    why.push('라이브러리 코드가 바뀌었는데 산출물은 그대로다 (내부 변경으로 보인다)');
+    // ⚠️ 예전엔 사유만 붙이고 등급은 ⚪ 로 뒀다. 그런데 이 문장은 사람과
+    //    점검 에이전트를 **정확히 안심시키는 방향으로** 틀린다 — 샘플이
+    //    낡았을 때도 똑같이 나오기 때문이다. 배포되는 코드가 바뀌었으면
+    //    최소한 "올릴 이유가 있다" 는 말은 해야 한다.
+    why.push('라이브러리 코드가 바뀌었는데 산출물 차이가 안 보인다 — ' +
+      '내부 변경이거나, 샘플이 낡았거나 둘 중 하나다');
+    grade = '🟡';
   }
   if (!ev.library.length && !ev.template.length && grade === '⚪') {
     why.push('배포되는 파일이 하나도 안 바뀌었다 — 올릴 이유가 없다');
@@ -196,7 +219,18 @@ function suggest(ev) {
 function main() {
   const argv = process.argv.slice(2);
   const i = argv.indexOf('--base');
+  if (i !== -1 && (!argv[i + 1] || argv[i + 1].startsWith('--'))) {
+    // 값 없는 --base 로 조용히 "비교 없음" 모드로 내려앉지 않는다.
+    throw new Error('--base 뒤에 기준(태그·커밋)이 없다');
+  }
   const base = i !== -1 ? argv[i + 1] : lastTag();
+
+  // ⚠️ 기준이 HEAD 면 "바뀐 게 없다 → ⚪ → 올릴 이유가 없다" 가 나온다.
+  //    SKILL 이 태그를 최종 커밋에 다니, 재실행하면 태그가 HEAD 를 가리켜
+  //    이 상태에 쉽게 빠진다. 확신에 찬 틀린 문장이라 특히 나쁘다.
+  if (base && git(['rev-parse', base + '^{commit}']) === git(['rev-parse', 'HEAD'])) {
+    throw new Error('기준(' + base + ')이 HEAD 와 같다 — 비교할 게 없다. --base 로 직전 릴리스를 지정해라.');
+  }
 
   const ev = collect(base);
   const s = suggest(ev);

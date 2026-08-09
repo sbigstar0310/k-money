@@ -12,10 +12,25 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
+const os = require('os');
+
 const ROOT = path.join(__dirname, '..');
 const build = require('../scripts/build-deploy');
 const record = require('../scripts/record-deploy');
 const deploy = require('../scripts/deploy');
+
+/**
+ * ⚠️ **테스트는 진짜 `build/` 에 쓰지 않는다.**
+ *
+ * 처음엔 그렇게 했는데, `throws` 를 기대하는 테스트가 복사까지 해 놓고
+ * 매니페스트 쓰기 직전에 죽어서 **`npm test` 는 초록인데 `build/` 가 반쯤
+ * 남았다.** 그 상태로 배포하면 `deploy.js` 는 디스크를 그냥 읽으므로
+ * 라이브러리 쪽은 완비돼 보여서 **조용히 성공한다.**
+ * 더 나쁜 건 `build('99')` 가 남긴 가짜 버전 번호가 그대로 배포되는 것이다.
+ */
+function tmpOut() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'kmoney-build-'));
+}
 
 // ─── build-deploy ────────────────────────────────────────────────────
 
@@ -53,29 +68,56 @@ test('라이브러리에는 매니페스트를 만들어 넣지 않는다', () =
 });
 
 test('빌드가 두 디렉터리를 만들고 목록대로만 담는다', () => {
-  const out = build.build(null);
+  const dir = tmpOut();
+  const out = build.build(null, dir);
   ['library', 'template'].forEach((target) => {
-    const dir = path.join(build.OUT, target);
-    const got = fs.readdirSync(dir).sort();
+    const got = fs.readdirSync(path.join(dir, target)).sort();
     const want = out.files[target].slice().sort();
     // 스냅샷은 대조용이라 목록 밖이다.
     assert.deepEqual(got.filter((f) => f !== build.LIBRARY_MANIFEST_SNAPSHOT), want,
       target + ' 에 목록에 없는 파일이 있거나 빠졌다');
   });
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('빌드가 라이브러리 번호를 템플릿 매니페스트에 주입한다', () => {
-  const out = build.build('99');
+  const dir = tmpOut();
+  const out = build.build('99', dir);
   assert.equal(out.libVersion, '99');
-  const m = JSON.parse(fs.readFileSync(path.join(build.OUT, 'template', 'appsscript.json'), 'utf8'));
+  const m = JSON.parse(fs.readFileSync(path.join(dir, 'template', 'appsscript.json'), 'utf8'));
   assert.equal(m.dependencies.libraries[0].version, '99');
-  build.build(null); // 원상 복구
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('배포 번호가 정수가 아니면 빌드가 죽는다', () => {
   // deploymentId 는 'AKfycb…' 문자열이고 versionNumber 는 정수다.
   // 둘을 헷갈리면 유저 드롭다운에 없는 값이 매니페스트에 박힌다.
-  assert.throws(() => build.build('AKfycbxyz'), /정수가 아니다/);
+  const dir = tmpOut();
+  assert.throws(() => build.build('AKfycbxyz', dir), /정수가 아니다/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('스탬프가 없으면 배포 전에 죽는다', () => {
+  // build/ 가 지금 커밋에서 나온 것인지 보는 유일한 장치다. 스탬프를 맨
+  // 마지막에 쓰므로, 빌드가 중간에 죽으면 스탬프가 없어서 여기서 걸린다.
+  const dir = tmpOut();
+  fs.mkdirSync(path.join(dir, 'library'), { recursive: true });
+  assert.throws(() => build.assertFresh('library', dir), /\.built\.json 이 없다/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('appsscript/ 의 모든 .gs 가 어디로 갈지 정해져 있다', () => {
+  // ⚠️ 화이트리스트의 반대 방향 실패다. 새 .gs 를 추가하고 TARGETS 에 넣는
+  //    걸 잊으면 로컬 테스트는 전부 통과하고 **배포된 라이브러리에서만**
+  //    ReferenceError 가 난다. 그때는 유저 손에서 터진다.
+  const onDisk = fs.readdirSync(path.join(ROOT, 'appsscript'))
+    .filter((f) => f.endsWith('.gs')).sort();
+  const routed = build.TARGETS.library.files
+    .concat(build.TARGETS.template.files)
+    .concat(['template.gs'])  // 개발자 1회용. 어디에도 안 나간다
+    .sort();
+  assert.deepEqual(onDisk, routed,
+    'appsscript/ 의 .gs 중 배포 목록에 없는 것이 있다 — 어디로 보낼지 정해라');
 });
 
 // ─── record-deploy ───────────────────────────────────────────────────
@@ -225,4 +267,64 @@ test('자격증명 경로가 저장소 밖이다', () => {
   // 이 토큰은 유저 메일함을 읽는 코드를 배포할 수 있다. 저장소에 두면
   // 커밋 한 번으로 새어 나간다.
   assert.ok(deploy.CONFIG.indexOf(ROOT) !== 0, '자격증명이 저장소 안을 가리킨다');
+});
+
+test('배포 스크립트가 자격증명을 로그에 넣지 않는다', () => {
+  // 이 스크립트들의 출력은 터미널만이 아니라 에이전트 트랜스크립트에도
+  // 남는다. 즉 사실상 영구 기록이다. 지금은 깨끗한데, 6개월 뒤 디버깅하다
+  // 한 줄 추가되는 걸 막는다.
+  ['deploy.js', 'deploy-login.js'].forEach((f) => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', f), 'utf8');
+    const bad = src.split('\n')
+      .filter((l) => /console\.(log|error)/.test(l))
+      .filter((l) => /clientSecret|refreshToken|refresh_token|access_token/.test(l));
+    assert.deepEqual(bad, [], f + ' 가 자격증명을 출력한다');
+  });
+});
+
+test('템플릿 스코프가 정확히 넷이고 늘지 않는다', () => {
+  // ⚠️ 스코프 증가가 이 프로젝트 최대 리스크다. 예전엔 이걸 "에이전트가
+  //    install.md 표와 대조하기" 로 뒀는데, 확실한 검사를 불확실한 검사로
+  //    덮는 것이었다. 늘어나면 npm run check 가 빨갛게 죽는 게 맞다.
+  const m = JSON.parse(fs.readFileSync(path.join(ROOT, 'appsscript', 'appsscript.json'), 'utf8'));
+  assert.deepEqual(m.oauthScopes, [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/script.scriptapp',
+  ], '스코프가 바뀌었다 — 늘렸다면 SECURITY.md·install.md·이 테스트를 같이 고쳐라');
+});
+
+test('배포되는 코드에 데이터를 밖으로 여는 통로가 없다', () => {
+  // SECURITY.md 가 유저에게 약속한 것이 이것이다. UrlFetchApp 만 막으면
+  // 부족하다 — spreadsheets 권한으로 =IMPORTDATA 를 써 넣으면 구글 서버가
+  // 대신 요청을 보내고, drive 권한으로 공유 설정을 열 수 있다.
+  const banned = ['UrlFetchApp', 'IMPORTDATA', 'IMPORTXML', 'IMPORTRANGE',
+    'setSharing', 'addEditor', 'eval('];
+
+  // ⚠️ 주석은 뺀다. `app.gs` 의 `safeCell()` 은 `' =IMPORTDATA(...)'` 가 수식으로
+  //    읽히는 걸 **막는** 코드이고, 주석이 그걸 설명한다. 그걸 위반으로 세면
+  //    방어 코드를 문서화한 대가로 테스트가 빨개진다 — 그러면 다음 사람은
+  //    주석을 지운다. 경보가 나쁜 행동을 부르면 안 된다.
+  const stripComments = function (s) {
+    return s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  };
+
+  build.TARGETS.library.files.concat(build.TARGETS.template.files).forEach((f) => {
+    const src = stripComments(fs.readFileSync(path.join(ROOT, 'appsscript', f), 'utf8'));
+    banned.forEach((b) => {
+      assert.ok(src.indexOf(b) === -1, f + ' 의 코드에 ' + b + ' 가 있다');
+    });
+  });
+});
+
+test('라이브러리 매니페스트 스냅샷이 저장소에 있다', () => {
+  // 없으면 deploy.js 의 원격 매니페스트 대조가 **통째로 꺼진다.**
+  // 꺼진 줄 모르고 도는 게 최악이라, 있는 걸 테스트가 지킨다.
+  const p = path.join(ROOT, 'appsscript', build.LIBRARY_MANIFEST_SNAPSHOT);
+  assert.ok(fs.existsSync(p), build.LIBRARY_MANIFEST_SNAPSHOT + ' 이 없다 — --snapshot-manifest');
+  const m = JSON.parse(fs.readFileSync(p, 'utf8'));
+  // 라이브러리는 호출 스크립트의 스코프로 돈다. 자기 스코프를 들고 있으면
+  // 유저 동의 화면이 늘어날 수 있으므로 없어야 한다.
+  assert.ok(!m.oauthScopes, '라이브러리 매니페스트에 oauthScopes 가 생겼다');
 });

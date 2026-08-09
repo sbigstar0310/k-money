@@ -62,11 +62,20 @@ function loadConfig() {
   }
 
   const cfg = JSON.parse(fs.readFileSync(CONFIG, 'utf8'));
-  ['clientId', 'clientSecret', 'refreshToken', 'libraryScriptId', 'templateScriptId']
-    .forEach(function (k) {
-      if (!cfg[k]) throw new Error('배포 설정에 ' + k + ' 가 없다');
-    });
-  return cfg;
+  ['clientId', 'clientSecret', 'refreshToken'].forEach(function (k) {
+    if (!cfg[k]) throw new Error('배포 설정에 ' + k + ' 가 없다 — npm run release:login');
+  });
+
+  // 주소는 저장소가 안다. 설정 파일에 옛 값이 남아 있어도 그건 안 쓴다 —
+  // 두 곳에 적힌 값은 언젠가 어긋나고, 어긋나면 엉뚱한 프로젝트에 배포된다.
+  const targets = require('./deploy-targets');
+  return {
+    clientId: cfg.clientId,
+    clientSecret: cfg.clientSecret,
+    refreshToken: cfg.refreshToken,
+    libraryScriptId: targets.libraryScriptId(),
+    templateScriptId: targets.TEMPLATE_SCRIPT_ID,
+  };
 }
 
 async function accessToken(cfg) {
@@ -131,6 +140,13 @@ function readBuild(target, names) {
   });
 }
 
+/** `--library` 가 남긴 실제 배포 번호. 사람이 두 숫자를 눈으로 맞추지 않게 한다. */
+function readDeployed() {
+  const p = path.join(BUILD, '.deployed.json');
+  if (!fs.existsSync(p)) return null;
+  return String(JSON.parse(fs.readFileSync(p, 'utf8')).libVersion);
+}
+
 function findManifest(files) {
   const m = files.filter(function (f) { return f.name === 'appsscript'; })[0];
   if (!m) throw new Error('원격 프로젝트에 매니페스트가 없다 — 잘못된 scriptId 인가?');
@@ -154,6 +170,8 @@ function diffFiles(sent, got) {
   sent.forEach(function (f) {
     const g = gotByName[f.name];
     if (!g) { problems.push(f.name + ' 이 원격에 없다'); return; }
+    // 이름과 내용이 같아도 타입이 다르면 다른 파일이다 (SERVER_JS ↔ HTML).
+    if (f.type !== g.type) problems.push(f.name + ' 의 타입이 다르다 (' + f.type + ' vs ' + g.type + ')');
     if (f.type === 'JSON') {
       const a = JSON.stringify(JSON.parse(f.source));
       const b = JSON.stringify(JSON.parse(g.source));
@@ -184,14 +202,35 @@ async function snapshotManifest(token, cfg) {
   console.log(pretty);
 }
 
-async function deployLibrary(token, cfg, description) {
+async function deployLibrary(token, cfg, description, opts) {
   const build = require('./build-deploy');
+  build.assertFresh('library');
 
   // 매니페스트는 지어내지 않는다. 원격 것을 읽어 **그대로 되쓴다.**
   const before = await api(token, 'GET', '/projects/' + cfg.libraryScriptId + '/content');
   const manifest = findManifest(before.files || []);
 
-  if (fs.existsSync(SNAPSHOT)) {
+  // ⚠️ 원격 파일 목록을 **덮어쓰기 전에** 본다. `updateContent` 는 요청에 없는
+  //    파일을 전부 지우므로, 편집기에서 누가 파일을 추가해 뒀다면 우리가
+  //    그걸 말없이 삭제하게 된다. 덮은 뒤에는 알 방법이 없다.
+  const expected = build.TARGETS.library.files
+    .map(function (f) { return f.replace(/\.gs$/, ''); }).concat(['appsscript']).sort();
+  const remote = (before.files || []).map(function (f) { return f.name; }).sort();
+  if (JSON.stringify(expected) !== JSON.stringify(remote)) {
+    throw new Error('원격 라이브러리의 파일 목록이 예상과 다르다.\n' +
+      '  예상: ' + expected.join(' ') + '\n  실제: ' + remote.join(' ') + '\n' +
+      '  편집기에서 누가 고쳤다는 뜻이다. 그대로 올리면 그 파일이 조용히 지워진다.');
+  }
+
+  // 스냅샷이 없으면 **대조가 통째로 꺼진다.** 꺼진 줄 모르고 도는 게 최악이라
+  // 없으면 죽는다. 처음이면 --snapshot-manifest 로 받아 **읽어보고** 커밋한다.
+  if (!fs.existsSync(SNAPSHOT)) {
+    if (!opts || !opts.allowMissingSnapshot) {
+      throw new Error('appsscript/appsscript.library.json 이 없다.\n' +
+        '  node scripts/deploy.js --snapshot-manifest 로 받아서 내용을 확인하고 커밋해라.\n' +
+        '  (정말 대조 없이 가려면 --allow-missing-snapshot)');
+    }
+  } else {
     const a = JSON.stringify(JSON.parse(fs.readFileSync(SNAPSHOT, 'utf8')));
     const b = JSON.stringify(JSON.parse(manifest.source));
     if (a !== b) {
@@ -204,13 +243,24 @@ async function deployLibrary(token, cfg, description) {
   const files = readBuild('library', build.TARGETS.library.files).concat([manifest]);
   await api(token, 'PUT', '/projects/' + cfg.libraryScriptId + '/content', { files: files });
 
-  // 배포를 만들면 버전이 자동으로 생기고, **번호가 응답에 실려 온다.**
-  // 손으로 읽어 적으려다 두 번 연속 틀린 그 숫자다.
+  // ⚠️ **버전을 먼저 만든다.** `deployments.create` 에 versionNumber 를 안 주면
+  //    버전이 생기는 게 아니라 **HEAD 배포**가 된다. 편집기의 "새 배포" 버튼이
+  //    버전을 만들어 주는 것과 API 는 다르다 — 구글 자신의 clasp 도
+  //    versionNumber 가 없으면 versions.create 를 먼저 부른다.
+  const ver = await api(token, 'POST', '/projects/' + cfg.libraryScriptId + '/versions',
+    { description: description });
+  const version = ver.versionNumber;
+  // 0 은 HEAD 다. 정규식만 쓰면 통과해서 유저 매니페스트에 박히고,
+  // HEAD 참조는 라이브러리 편집 권한이 있어야 돌아 **유저 사본에서만 깨진다.**
+  if (!Number.isInteger(version) || version < 1) {
+    throw new Error('versions.create 가 정수 버전을 안 줬다: ' + JSON.stringify(ver));
+  }
+
   const dep = await api(token, 'POST', '/projects/' + cfg.libraryScriptId + '/deployments',
-    { versionNumber: undefined, manifestFileName: 'appsscript', description: description });
-  const version = (dep.deploymentConfig || {}).versionNumber;
-  if (!/^\d+$/.test(String(version))) {
-    throw new Error('배포 응답에 정수 versionNumber 가 없다: ' + JSON.stringify(dep));
+    { versionNumber: version, manifestFileName: 'appsscript', description: description });
+  if ((dep.deploymentConfig || {}).versionNumber !== version) {
+    throw new Error('배포가 다른 버전을 가리킨다: 만든 건 ' + version +
+      ', 배포는 ' + JSON.stringify((dep.deploymentConfig || {}).versionNumber));
   }
 
   // 구글이 실제로 저장한 그 버전을 되읽어 맞춰 본다.
@@ -222,13 +272,33 @@ async function deployLibrary(token, cfg, description) {
       problems.join('\n  - '));
   }
 
+  fs.writeFileSync(path.join(BUILD, '.deployed.json'),
+    JSON.stringify({ libVersion: version, deploymentId: dep.deploymentId }, null, 2) + '\n');
+
   return { version: version, deploymentId: dep.deploymentId, files: files.length };
 }
 
-async function deployTemplate(token, cfg) {
+async function deployTemplate(token, cfg, expectLibVersion) {
   const build = require('./build-deploy');
+  build.assertFresh('template');
+
   const names = build.TARGETS.template.files.concat([build.TARGETS.template.manifest]);
   const files = readBuild('template', names);
+
+  // ⚠️ **여기가 이 파이프라인에서 가장 조용한 실패 자리다.** 템플릿이 옛
+  //    라이브러리 번호를 가리키면 새로 사본 뜨는 사람이 옛 코드를 받는데
+  //    오류가 하나도 안 난다. 그래서 방금 배포한 번호와 **반드시** 맞춘다.
+  const pinned = JSON.parse(findManifest(files).source)
+    .dependencies.libraries[0].version;
+  const want = expectLibVersion === undefined ? readDeployed() : String(expectLibVersion);
+  if (!want) {
+    throw new Error('어느 라이브러리 번호를 기대하는지 모른다.\n' +
+      '  --expect-lib-version <N> 을 주거나, 같은 세션에서 --library 를 먼저 돌려라.');
+  }
+  if (pinned !== want) {
+    throw new Error('템플릿이 가리키는 라이브러리 번호가 다르다: 매니페스트 ' + pinned +
+      ', 기대 ' + want + '\n  node scripts/build-deploy.js --lib-version ' + want + ' 를 먼저 돌려라.');
+  }
 
   await api(token, 'PUT', '/projects/' + cfg.templateScriptId + '/content', { files: files });
 
@@ -245,21 +315,52 @@ async function deployTemplate(token, cfg) {
 
 // ─── 진입점 ──────────────────────────────────────────────────────────
 
+const MODES = ['--snapshot-manifest', '--library', '--template', '--preflight', '--check-config'];
+
 async function main() {
   const argv = process.argv.slice(2);
+
+  // ⚠️ 예전엔 첫 매치에서 반환해서 `--library --template` 을 주면 템플릿이
+  //    **조용히 안 나갔다.** 한 줄로 묶어 쓴 사람은 나갔다고 믿는다.
+  const picked = MODES.filter(function (m) { return argv.includes(m); });
+  if (picked.length === 0) throw new Error('무엇을 할지 안 골랐다: ' + MODES.join(' | '));
+  if (picked.length > 1) {
+    throw new Error('한 번에 하나만 한다. 준 것: ' + picked.join(' ') +
+      '\n  라이브러리 → record-deploy → 다시 빌드 → 템플릿 순서라 묶을 수 없다.');
+  }
+  const mode = picked[0];
+
+  // 자격증명 파일을 열지 않고 존재·권한만 본다. 에이전트가 디버깅하려고
+  // `cat` 하는 순간 토큰이 트랜스크립트에 박히므로, 그럴 이유를 안 만든다.
+  if (mode === '--check-config') {
+    loadConfig();
+    console.log('→ 배포 설정 있음, 권한 OK');
+    return;
+  }
+
   const cfg = loadConfig();
   const token = await accessToken(cfg);
 
-  if (argv.includes('--snapshot-manifest')) {
+  // 나가기 전에 **읽기만** 해본다. 토큰 만료(동의화면 "테스트 중"이면 7일)와
+  // Apps Script API 토글 꺼짐을 배포 도중이 아니라 시작 전에 잡는다.
+  if (mode === '--preflight') {
+    await api(token, 'GET', '/projects/' + cfg.libraryScriptId + '/content');
+    await api(token, 'GET', '/projects/' + cfg.templateScriptId + '/content');
+    console.log('→ 토큰 유효, 두 프로젝트 모두 읽힘');
+    return;
+  }
+
+  if (mode === '--snapshot-manifest') {
     await snapshotManifest(token, cfg);
     return;
   }
 
-  if (argv.includes('--library')) {
+  if (mode === '--library') {
     const i = argv.indexOf('--description');
     const desc = i === -1 ? 'v' + fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').trim()
       : argv[i + 1];
-    const out = await deployLibrary(token, cfg, desc);
+    const out = await deployLibrary(token, cfg, desc,
+      { allowMissingSnapshot: argv.includes('--allow-missing-snapshot') });
     console.log('→ 라이브러리 ' + out.files + '개 파일, 배포 버전 ' + out.version +
       ' (' + out.deploymentId + ')');
     console.log('→ 되읽기 대조 통과');
@@ -268,14 +369,10 @@ async function main() {
     return;
   }
 
-  if (argv.includes('--template')) {
-    const out = await deployTemplate(token, cfg);
-    console.log('→ 템플릿 ' + out.files + '개 파일 (라이브러리 v' + out.libVersion + ')');
-    console.log('→ 되읽기 대조 통과');
-    return;
-  }
-
-  throw new Error('무엇을 할지 안 골랐다: --snapshot-manifest | --library | --template');
+  const j = argv.indexOf('--expect-lib-version');
+  const out = await deployTemplate(token, cfg, j === -1 ? undefined : argv[j + 1]);
+  console.log('→ 템플릿 ' + out.files + '개 파일 (라이브러리 v' + out.libVersion + ')');
+  console.log('→ 되읽기 대조 통과');
 }
 
 module.exports = { toApiFile: toApiFile, diffFiles: diffFiles, CONFIG: CONFIG };

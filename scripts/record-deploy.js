@@ -88,6 +88,16 @@ function recordHistory(text, version, libVersion, note) {
   });
   if (existing.length) return { text: text, changed: false };
 
+  // ⚠️ 배포 번호는 늘어나기만 한다. 재실행이 옛 번호를 물고 오면 이력표만
+  //    조용히 넘어가고 CHANGELOG·매니페스트는 그 옛 번호로 바뀐다.
+  const numbers = lines
+    .map(function (l) { return (l.trim().match(/^\|\s*(\d+)\s*\|/) || [])[1]; })
+    .filter(Boolean).map(Number);
+  const max = numbers.length ? Math.max.apply(null, numbers) : 0;
+  if (Number(libVersion) < max) {
+    throw new Error('배포 번호가 뒤로 간다: 이력표 최대 ' + max + ', 지금 ' + libVersion);
+  }
+
   const row = '| ' + libVersion + ' | ' + version + ' | ' + note + ' |';
   return {
     text: text.slice(0, from + BEGIN.length) + '\n' + lines.concat([row]).join('\n') + '\n' +
@@ -125,9 +135,24 @@ function run(libVersion, note) {
   const b = recordHistory(fs.readFileSync(DEPLOY_DOC, 'utf8'), version, libVersion, note);
   const c = recordManifest(fs.readFileSync(MANIFEST, 'utf8'), libVersion);
 
-  if (a.changed) fs.writeFileSync(CHANGELOG, a.text);
-  if (b.changed) fs.writeFileSync(DEPLOY_DOC, b.text);
-  if (c.changed) fs.writeFileSync(MANIFEST, c.text);
+  // ⚠️ 검증만 원자적이면 부족하다. 쓰기 세 번 중 두 번째가 실패하면
+  //    (EACCES·ENOSPC·중간에 죽음) CHANGELOG 만 갱신되고 나머지는 옛것이다.
+  //    그래서 전부 `.tmp` 에 쓴 뒤 rename 으로 바꾼다 — 같은 파일시스템의
+  //    rename 은 원자적이라 반쯤 쓰인 파일이 남지 않는다.
+  const writes = [[CHANGELOG, a], [DEPLOY_DOC, b], [MANIFEST, c]]
+    .filter(function (w) { return w[1].changed; });
+  const tmps = [];
+  try {
+    writes.forEach(function (w) {
+      const tmp = w[0] + '.tmp';
+      fs.writeFileSync(tmp, w[1].text);
+      tmps.push([tmp, w[0]]);
+    });
+    tmps.forEach(function (t) { fs.renameSync(t[0], t[1]); });
+  } catch (e) {
+    tmps.forEach(function (t) { try { fs.unlinkSync(t[0]); } catch (x) { /* 이미 옮겨졌다 */ } });
+    throw e;
+  }
 
   return {
     version: version,
@@ -157,9 +182,12 @@ if (require.main === module) {
   }
   try {
     const out = run(libVersion, note);
+    // ⚠️ `+` 가 `||` 보다 먼저 묶여서 fallback 이 절대 안 나오던 자리다.
+    //    아무것도 안 했을 때 "적었다" 로 읽히면 이 스크립트의 유일한 출력이
+    //    거짓말을 하는 셈이다.
+    const done = Object.keys(out.changed).filter(function (k) { return out.changed[k]; });
     console.log('→ ' + out.version + ' ← 라이브러리 ' + out.libVersion + '  ' +
-      Object.keys(out.changed).filter(function (k) { return out.changed[k]; }).join(' · ') ||
-      '(이미 다 적혀 있다)');
+      (done.length ? done.join(' · ') : '(이미 다 적혀 있어 바꾼 것 없음)'));
   } catch (e) {
     console.error('✖ ' + e.message);
     process.exit(1);

@@ -74,7 +74,7 @@
 | `PropertiesService.getScriptProperties()` | **라이브러리 프로젝트**의 속성. 유저 비밀번호가 거기 없다 |
 | `Session.getScriptTimeZone()` | **라이브러리**의 시간대. 유저 화면의 시각이 틀어진다 |
 | `ScriptApp.newTrigger()` | 어느 프로젝트에 걸리는지 불분명하다 |
-| `Drive`(고급 서비스) | 라이브러리 프로젝트에서도 켜져 있어야 한다 |
+| `Drive`(고급 서비스) | ~~라이브러리 프로젝트에서도 켜져 있어야 한다~~ **틀렸다.** 2026-08-09 에 실제 라이브러리 매니페스트를 받아 보니 `"dependencies": {}` 였고, 그래도 잘 돈다 — 컨테이너가 `env.driveApi` 로 넘기기 때문이다. 켤 필요 없다 |
 
 `instanceof Date` 가 경계를 못 넘어 84개월짜리 산출물이 나온 적이 있다 (§6). **한 프로젝트에 다 넣고 테스트하면 재현되지 않는 종류다.** 그러니 추측하지 않는다 — 컨테이너가 자기 컨텍스트에서 만든 것을 `env` 에 담아 넘기고, `app.gs` 는 받은 것만 쓴다. `ScriptApp` 만은 컨테이너에 남겨 콜백으로 넘긴다.
 
@@ -90,7 +90,26 @@
 
 ---
 
-## 3. 개발자 — 새 버전 내보내기
+> ⚠️ **이 절은 자동화됐다 (2026-08-09).** 아래 손 절차는 자동화가 실패했을 때의
+> 비상 경로로 남긴다. 평소에는 `.claude/skills/release/SKILL.md` 가 정본이고,
+> 스크립트만으로도 된다.
+>
+> ```sh
+> node scripts/impact.js                      # 등급 하한을 측정한다
+> npm version patch --no-git-tag-version      # CHANGELOG 는 먼저 손으로 쓴다 ('대기')
+> npm run check && git commit
+> node scripts/build-deploy.js
+> node scripts/deploy.js --library            # 번호를 API 로 받는다 → LIBRARY_VERSION=N
+> node scripts/record-deploy.js <N> --note "…"  # CHANGELOG·이력표·매니페스트 동시
+> node scripts/build-deploy.js --lib-version <N>
+> node scripts/deploy.js --template           # container.gs 와 매니페스트가 한 요청으로
+> node scripts/verify-release.js <N>
+> ```
+>
+> 자동화가 없애는 것은 아래 3번(번호를 손으로 읽어 적기)과 §5의 짝 맞추기다.
+> **둘 다 실제로 틀린 적이 있다.**
+
+## 3. 개발자 — 새 버전 내보내기 (비상 경로)
 
 ```sh
 # 1. 고치고 검증
@@ -201,6 +220,8 @@ GitHub 에서 `VERSION` 문자열을 받아 새 버전을 알려주는 메뉴가
 | `HEAD(개발 모드)`는 라이브러리 **편집 권한**이 필요 | 유저는 못 쓴다. 개발자 전용 |
 | 유저가 버전을 안 올리면 **영원히 옛 버전** | 그게 설계다. 강제하지 않는다 |
 | `container.gs`는 **갱신 경로가 없다** | 유저 시트 안의 사본이다. 로직을 두지 말고 라이브러리로 민다 |
+| **버전은 지울 수 없다** | `projects.versions` 에 `delete` 가 없다. 잘못 만든 버전 N 은 **영원히 유저 드롭다운에 남는다.** 복구는 N+1 을 내보내는 roll-forward 뿐이다 |
+| **배포 개수 상한** | 프로젝트당 배포 수에 상한이 있다. 릴리스마다 새 배포를 만드니 언젠가 부딪힌다 — 그때 옛 배포를 정리해야 한다 |
 
 ### 스코프
 

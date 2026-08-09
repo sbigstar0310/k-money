@@ -117,26 +117,72 @@ function writeTemplateManifest(destDir, libVersion) {
   return libs[0].version;
 }
 
-function build(libVersion) {
-  rmrf(OUT);
+/** 지금 워킹트리의 커밋. 빌드 산물이 어느 시점 것인지 스탬프에 남긴다. */
+function gitHead() {
+  try {
+    return require('child_process')
+      .execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * `build/` 가 **지금 이 커밋에서 나온 것인지** 본다.
+ *
+ * ⚠️ `deploy.js` 는 디스크의 `build/` 를 그냥 읽는다. 그 사이에 테스트가
+ *    거기 쓰거나, 빌드가 중간에 죽었거나, 다른 커밋에서 만든 게 남아 있으면
+ *    **옛 코드가 조용히 배포된다.** 이 저장소가 이미 한 번 당한 사고
+ *    (`core/` 를 고치고 빌드를 안 한 채 테스트가 전부 초록)의 배포판이다.
+ */
+function assertFresh(target, dest) {
+  const dir = dest || OUT;
+  const stampPath = path.join(dir, '.built.json');
+  if (!fs.existsSync(stampPath)) {
+    throw new Error('build/.built.json 이 없다 — node scripts/build-deploy.js 를 먼저 돌려라');
+  }
+  const stamp = JSON.parse(fs.readFileSync(stampPath, 'utf8'));
+  const head = gitHead();
+  if (head && stamp.gitHead !== head) {
+    throw new Error('build/ 가 지금 커밋에서 나온 게 아니다.\n' +
+      '  빌드: ' + stamp.gitHead + '\n  현재: ' + head + '\n  다시 빌드해라.');
+  }
+  const want = TARGETS[target].files.concat(
+    TARGETS[target].manifest ? [TARGETS[target].manifest] : []);
+  want.forEach(function (f) {
+    if (!fs.existsSync(path.join(dir, target, f))) {
+      throw new Error('build/' + target + '/' + f + ' 이 없다 — 빌드가 중간에 죽었나?');
+    }
+  });
+  return stamp;
+}
+
+function build(libVersion, dest) {
+  const out = dest || OUT;
+  rmrf(out);
 
   const result = {};
   Object.keys(TARGETS).forEach(function (target) {
-    const destDir = path.join(OUT, target);
+    const destDir = path.join(out, target);
     fs.mkdirSync(destDir, { recursive: true });
     copyFiles(target, TARGETS[target].files, destDir);
     result[target] = TARGETS[target].files.slice();
   });
 
-  const pinned = writeTemplateManifest(path.join(OUT, 'template'), libVersion);
+  const pinned = writeTemplateManifest(path.join(out, 'template'), libVersion);
   result.template.push('appsscript.json');
 
   // 라이브러리 매니페스트 스냅샷이 저장소에 있으면 같이 내보낸다.
   // deploy.js 가 살아 있는 것과 **대조**하는 데 쓴다 (덮어쓰기용이 아니다).
   const snapshot = path.join(SRC, LIBRARY_MANIFEST_SNAPSHOT);
   if (fs.existsSync(snapshot)) {
-    fs.copyFileSync(snapshot, path.join(OUT, 'library', LIBRARY_MANIFEST_SNAPSHOT));
+    fs.copyFileSync(snapshot, path.join(out, 'library', LIBRARY_MANIFEST_SNAPSHOT));
   }
+
+  // 스탬프는 **맨 마지막**에 쓴다. 중간에 죽으면 스탬프가 없어서
+  // `assertFresh` 가 잡는다 — 반쯤 만들어진 build/ 를 배포하지 않는다.
+  fs.writeFileSync(path.join(out, '.built.json'),
+    JSON.stringify({ gitHead: gitHead(), libVersion: pinned }, null, 2) + '\n');
 
   return { files: result, libVersion: pinned, hasSnapshot: fs.existsSync(snapshot) };
 }
@@ -146,6 +192,7 @@ module.exports = {
   LIBRARY_MANIFEST_SNAPSHOT: LIBRARY_MANIFEST_SNAPSHOT,
   OUT: OUT,
   build: build,
+  assertFresh: assertFresh,
 };
 
 if (require.main === module) {
