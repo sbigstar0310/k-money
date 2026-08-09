@@ -93,6 +93,10 @@ function fakeFolder(name) {
       const file = {
         getName: () => fileName,
         getBlob: () => ({ getDataAsString: () => content }),
+        // Drive 의 getSize() 는 **바이트**다. putFile 이 "같은 내용이면
+        // 손대지 않는다" 를 판단할 때 blob.getBytes().length 와 맞대므로,
+        // 여기서도 코드유닛이 아니라 바이트를 세야 한국어에서 안 어긋난다.
+        getSize: () => Buffer.byteLength(String(content), 'utf8'),
         // 테스트가 필요하면 덮어쓴다. 기본값이 같으므로 동점 처리도 지난다.
         getDateCreated: () => new Date(0),
         setContent(c) { content = c; return this; },
@@ -272,23 +276,6 @@ test('hint — 이모지를 반쪽으로 자르지 않는다', () => {
   assert.equal(Array.from(h)[0], '🔑');
 });
 
-// ── 처리 이력 ─────────────────────────────────────────────────────
-
-test('markProcessed — 보관 개수를 넘기면 오래된 것부터 버린다', () => {
-  const A = loadApp();
-  const props = propsStub({});
-  for (let i = 0; i < A.CFG.processedKeep + 10; i++) A.markProcessed(props, 'm' + i);
-  const list = A.getProcessed(props);
-  assert.equal(list.length, A.CFG.processedKeep);
-  assert.equal(list.indexOf('m0'), -1, '오래된 것이 남아 있다');
-  assert.ok(list.indexOf('m' + (A.CFG.processedKeep + 9)) !== -1);
-});
-
-test('getProcessed — 속성이 깨져 있어도 죽지 않는다', () => {
-  const A = loadApp();
-  assert.deepEqual(A.getProcessed(propsStub({ PROCESSED_MESSAGE_IDS: '{{{' })), []);
-});
-
 // ── Gmail 고르기 ──────────────────────────────────────────────────
 
 test('findAttachment — 여러 통이면 가장 최근 것', () => {
@@ -306,14 +293,19 @@ test('findAttachment — 여러 통이면 가장 최근 것', () => {
   assert.equal(A.findAttachment(env).id, 'new');
 });
 
-test('findAttachment — 이미 처리한 건 건너뛴다. force 면 다시 본다', () => {
+test('findAttachment — 이미 본 메일이어도 언제나 가장 최근 것. 과거로 안 간다', () => {
+  // ⚠️ 실측 회귀: '처리 안 한 것 중 가장 최근' 이었을 때, 8/8 메일을 처리한
+  //    다음 실행이 7/26 메일을 집어서 최신본을 2주 전으로 덮었다. 밀린 옛날
+  //    메일이 있는 만큼 매일 하루씩 뒤로 걸어간다.
   const A = loadApp();
   const env = fakeEnv({
-    props: propsStub({ PROCESSED_MESSAGE_IDS: JSON.stringify(['seen']) }),
-    gmail: { search: () => [{ getMessages: () => [fakeMessage('seen', new Date(), 'a.zip')] }] },
+    gmail: { search: () => [{ getMessages: () => [
+      fakeMessage('jul', new Date('2026-07-26'), 'a.zip'),
+      fakeMessage('aug', new Date('2026-08-08'), 'b.zip'),
+    ] }] },
   });
-  assert.equal(A.findAttachment(env), null);
-  assert.equal(A.findAttachment(env, true).id, 'seen');
+  assert.equal(A.findAttachment(env).id, 'aug');
+  assert.equal(A.findAttachment(env).id, 'aug', '두 번째 실행도 같은 것을 골라야 한다');
 });
 
 test('findAttachment — zip 이 아닌 첨부는 무시한다', () => {
@@ -434,7 +426,6 @@ test('process — 끝까지 돌면 최신본과 원본 zip 이 남는다', () =>
   // ⚠️ 메일 수신일(6/11)이 아니라 거래 마지막 날(6/10)이어야 한다.
   //    "데이터는 X 까지 있어요" 라고 말할 값이라 여기가 어긋나면 거짓말이 된다.
   assert.equal(env.props.getProperty('LAST_INGEST_DATE'), '2026-06-10');
-  assert.deepEqual(A.getProcessed(env.props), ['m1']);
 });
 
 test('process — 두 번 돌려도 같은 날 파일이 늘어나지 않는다', () => {
@@ -461,6 +452,52 @@ test('process — 두 번 돌려도 같은 날 파일이 늘어나지 않는다'
   assert.equal(after2, after1, '같은 날인데 파일이 늘었다');
 });
 
+test('최신본은 과거로 가지 않는다 — 메일이 새것이어도 데이터가 옛날이면', () => {
+  // ⚠️ 뱅샐은 내보낼 기간을 고를 수 있다. 그래서 **가장 최근 메일이 가장
+  //    최근 데이터라는 보장이 없다.** 유저가 과거 구간을 다시 내보내면
+  //    최신본이 뒤로 가고, AI 가 2주 전 잔액을 오늘로 읽는다.
+  //    메일을 어떻게 고르든 이 가드가 마지막 방어선이다.
+  let sheets = {
+    '가계부 내역': H.ledgerSheet([{ day: '2026-06-10', kind: '지출', amount: 5000 }]),
+    '뱅샐현황': H.statusSheet({ owner: '홍길동' }),
+  };
+  let mail = fakeMessage('m1', new Date('2026-06-11'), 'a.zip');
+  const A = loadApp({ unzipEncrypted: () => [fakeBlob('가계부.xlsx', 'x')] });
+  const env = fakeEnv({
+    props: propsStub({ BANKSALAD_ZIP_PASSWORD: '0930' }),
+    gmail: { search: () => [{ getMessages: () => [mail] }] },
+    sheets: {
+      openById: () => ({
+        getSheets: () => Object.keys(sheets).map((n) => ({
+          getName: () => n,
+          getDataRange: () => ({ getValues: () => sheets[n] }),
+        })),
+      }),
+    },
+  });
+
+  assert.equal(A.process(env).step, 'done');
+  assert.equal(env.props.getProperty('LAST_INGEST_DATE'), '2026-06-10');
+
+  // 더 나중에 받은 메일인데, 안에 든 데이터는 5월까지뿐이다.
+  sheets = {
+    '가계부 내역': H.ledgerSheet([{ day: '2026-05-01', kind: '지출', amount: 3000 }]),
+    '뱅샐현황': H.statusSheet({ owner: '홍길동' }),
+  };
+  mail = fakeMessage('m2', new Date('2026-06-20'), 'b.zip');
+
+  const r = A.process(env);
+  assert.equal(r.step, 'behind', r.message);
+
+  const folder = env._root.getFoldersByName(A.CFG.folderName).next();
+  const latest = JSON.parse(folder._get(A.CFG.latestName).getBlob().getDataAsString());
+  assert.equal(latest.generatedFor, '2026-06-10', '최신본이 과거로 덮였다');
+  assert.equal(env.props.getProperty('LAST_INGEST_DATE'), '2026-06-10',
+    '신선도 기준까지 과거로 되돌아갔다');
+  // 히스토리는 남긴다 — 받은 날 기준이라 안 부딪히고, 나중에 다시 계산할 근거다.
+  assert.ok(folder._has(A.historyName('2026-06-20')), '히스토리를 안 남겼다');
+});
+
 test('모든 실행 경로가 잠금을 지난다', () => {
   // 예전엔 runOnceForce 만 잠금 없이 돌았고, 그게 하필 컨테이너에 있어서
   // 이미 사본을 뜬 사람에게는 영영 못 고치는 상태였다.
@@ -476,17 +513,15 @@ test('모든 실행 경로가 잠금을 지난다', () => {
   });
 });
 
-test('runForced 는 이미 처리한 메일도 다시 본다', () => {
+test('runDaily 도 runForced 도 같은 메일을 매번 다시 본다', () => {
   const A = loadApp({ unzipEncrypted() { throw new Error('여기까지 왔으면 통과'); } });
   const env = fakeEnv({
-    props: propsStub({
-      BANKSALAD_ZIP_PASSWORD: '0930',
-      PROCESSED_MESSAGE_IDS: JSON.stringify(['seen']),
-    }),
+    props: propsStub({ BANKSALAD_ZIP_PASSWORD: '0930' }),
     gmail: { search: () => [{ getMessages: () => [fakeMessage('seen', new Date(), 'a.zip')] }] },
   });
-  assert.equal(A.runDaily(env).step, 'idle', '평소엔 건너뛴다');
-  assert.equal(A.runForced(env).step, 'decrypt', 'force 면 다시 본다');
+  assert.equal(A.runDaily(env).step, 'decrypt');
+  assert.equal(A.runDaily(env).step, 'decrypt', '두 번째도 건너뛰지 않는다');
+  assert.equal(A.runForced(env).step, 'decrypt');
 });
 
 test('매일 거래하지 않아도 스냅샷이 쌓이고 delta 가 나온다', () => {

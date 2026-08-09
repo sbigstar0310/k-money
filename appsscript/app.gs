@@ -59,7 +59,6 @@ var KMApp = (function () {
     historyPattern: /^돈동생-\d{4}-\d{2}-\d{2}\.json$/,
     keepFacts: 12,        // 지난 기록 보관 개수. 델타 계산에 히스토리가 필요하다
     searchThreads: 10,
-    processedKeep: 50,    // 중복 처리 방지용 메시지 ID 보관 개수
     staleDays: 14,        // 이만큼 새 데이터가 없으면 시트 첫 화면에서 경고한다
     // MimeType.GOOGLE_SHEETS 를 쓰지 않는다. 열거형 하나라도 경계를 덜 넘는 게 낫다.
     sheetsMime: 'application/vnd.google-apps.spreadsheet',
@@ -67,7 +66,6 @@ var KMApp = (function () {
 
   var PROP = {
     password: 'BANKSALAD_ZIP_PASSWORD',
-    processed: 'PROCESSED_MESSAGE_IDS',
     passwordHint: 'BANKSALAD_ZIP_PASSWORD_HINT',
     // 값은 **거래의 마지막 날**이다 (메일 수신일이 아니다). dataAge_ 참고.
     lastIngest: 'LAST_INGEST_DATE',
@@ -90,7 +88,7 @@ var KMApp = (function () {
       return { ok: false, step: 'setup', message: '비밀번호가 아직 없어요. 메뉴에서 ① 처음 설정하기 를 눌러 주세요.' };
     }
 
-    var found = findAttachment(env, opts.force);
+    var found = findAttachment(env);
     if (!found) {
       return { ok: true, step: 'idle',
         message: '새로 온 뱅크샐러드 메일이 없어요. 앱에서 「파일로 받기」를 눌러 주세요.' };
@@ -180,15 +178,38 @@ var KMApp = (function () {
     //    덮어쓰고, readPrevious 가 자기보다 앞선 걸 못 찾아 delta 가 영영
     //    안 나온다 (실측: 순자산이 120만원 움직였는데 보고 0건).
     //    파일 이름은 **스냅샷의 정체**고, generatedFor 는 **내용**이다.
-    putJson(folder, historyName(stamp), json);
-    putJson(folder, CFG.latestName, json);
-    pruneFacts(folder);
-
-    markProcessed(env.props, found.id);
     // ⚠️ 메일 **수신일**이 아니라 거래의 **마지막 날**을 적는다.
     //    유저에게 "데이터는 X 까지 있어요" 라고 말할 값이라, 저장하는 것이
     //    그 문장과 같아야 한다.
     var day = facts.generatedFor || stamp;
+
+    // 히스토리는 언제나 남긴다 — 이름이 받은 날 기준이라 부딪히지 않고,
+    // 나중에 집계를 고쳤을 때 다시 계산할 근거가 된다.
+    putJson(folder, historyName(stamp), json);
+
+    // ⚠️ **최신본은 절대 과거로 가지 않는다.** 메일이 최신이라고 그 안의
+    //    데이터가 최신인 건 아니다 — 뱅샐은 내보낼 기간을 고를 수 있어서,
+    //    유저가 과거 구간을 다시 내보내면 '가장 최근 메일'이 더 옛날 데이터를
+    //    들고 온다. 그때 최신본을 덮으면 AI 가 2주 전 잔액을 오늘로 읽는다.
+    //    메일을 어떻게 고르든 이 가드가 마지막 방어선이다.
+    var prev = readJson(folder, CFG.latestName);
+    var prevDay = prev && (prev.generatedFor || null);
+    if (prevDay && day < prevDay) {
+      pruneFacts(folder);
+      return {
+        // ⚠️ 실패가 아니다 — 지켜낸 것이다. 시트가 result.message 앞에 ✅ 를
+        //    붙이므로(writeStatusToSheet) 문장도 그렇게 읽혀야 한다.
+        //    데이터가 정말 오래됐으면 신선도 줄이 먼저 나가니 여기서 다시
+        //    "내보내 주세요" 를 말할 필요가 없다.
+        ok: true, step: 'behind',
+        message: '이미 가진 데이터(' + prevDay + ')가 더 최신이라 그대로 뒀어요. ' +
+                 '이 메일은 ' + day + ' 까지였어요.',
+        generatedFor: prevDay,
+      };
+    }
+
+    putJson(folder, CFG.latestName, json);
+    pruneFacts(folder);
     env.props.setProperty(PROP.lastIngest, day);
 
     return {
@@ -234,15 +255,31 @@ var KMApp = (function () {
     return runGuarded(env, {});
   }
 
-  /** 편집기에서 손으로 돌릴 때. 이미 처리한 메일도 다시 본다. */
+  /**
+   * 편집기·메뉴에서 손으로 돌릴 때.
+   *
+   * 처리 이력이 없어진 뒤로 runDaily 와 하는 일이 같다. 이름을 남겨 두는 건
+   * container.gs 의 runOnceForce 와 메뉴가 부르고 있어서다 — 사본을 이미 뜬
+   * 사람의 컨테이너는 못 고친다.
+   */
   function runForced(env) {
-    return runGuarded(env, { force: true });
+    return runGuarded(env, {});
   }
 
   // ── Gmail ────────────────────────────────────────────────────────
 
-  function findAttachment(env, force) {
-    var processed = getProcessed(env.props);
+  /**
+   * 메일함에서 **무조건 가장 최근** 뱅샐 zip 메일을 고른다.
+   *
+   * ⚠️ 예전엔 '처리 안 한 것 중 가장 최근'이었다. 그러면 밀린 옛날 메일이
+   *    남아 있는 동안 **매 실행이 하루씩 과거로 걸어간다.** 실측: 8/8 메일을
+   *    처리한 다음 실행이 7/26 메일을 집어서 최신본을 2주 전으로 덮었다.
+   *    처리 이력(PROCESSED_MESSAGE_IDS)은 중복 처리를 막으려던 건데, 이
+   *    제품에서 중복 처리는 무해하고 **과거로 가는 것이 유해하다.** 지키려던
+   *    것이 애초에 틀려서 목록째 없앴다. 같은 메일을 다시 처리해도 stamp 가
+   *    같아 히스토리 이름도 같으니 아무것도 쌓이지 않는다.
+   */
+  function findAttachment(env) {
     var threads = env.gmail.search(CFG.gmailQuery, 0, CFG.searchThreads);
     var best = null;
 
@@ -250,8 +287,6 @@ var KMApp = (function () {
       var messages = threads[i].getMessages();
       for (var j = 0; j < messages.length; j++) {
         var m = messages[j];
-        if (!force && processed.indexOf(m.getId()) !== -1) continue;
-
         var atts = m.getAttachments();
         for (var k = 0; k < atts.length; k++) {
           var a = atts[k];
@@ -266,21 +301,6 @@ var KMApp = (function () {
     return best;
   }
 
-  function getProcessed(props) {
-    try {
-      return JSON.parse(props.getProperty(PROP.processed) || '[]');
-    } catch (e) {
-      return [];
-    }
-  }
-
-  function markProcessed(props, id) {
-    var list = getProcessed(props);
-    if (list.indexOf(id) === -1) list.push(id);
-    while (list.length > CFG.processedKeep) list.shift();
-    props.setProperty(PROP.processed, JSON.stringify(list));
-  }
-
   // ── Drive ────────────────────────────────────────────────────────
 
   function ensureFolder(parent, name) {
@@ -293,9 +313,17 @@ var KMApp = (function () {
     return it.hasNext() ? it.next() : null;
   }
 
+  /**
+   * ⚠️ **같은 내용이면 손대지 않는다.** 이제 새 메일이 없어도 매일 최신 메일을
+   *    다시 처리하므로, 무조건 덮으면 같은 zip 이 매일 하나씩 휴지통으로 간다
+   *    (1년이면 365개). 유저 드라이브라 조용히 쌓이면 안 된다.
+   */
   function putFile(folder, name, blob) {
     var existing = findFile(folder, name);
-    if (existing) existing.setTrashed(true);
+    if (existing) {
+      if (existing.getSize() === blob.getBytes().length) return existing;
+      existing.setTrashed(true);
+    }
     return folder.createFile(blob.setName(name));
   }
 
@@ -1081,7 +1109,7 @@ var KMApp = (function () {
     CFG: CFG, PROP: PROP, checkSetup: checkSetup,
     STATUS_CELL: STATUS_CELL, CHECKED_CELL: CHECKED_CELL, STATUS_SHEET: STATUS_SHEET,
     process: process, runDaily: runDaily, runForced: runForced, runGuarded: runGuarded,
-    findAttachment: findAttachment, getProcessed: getProcessed, markProcessed: markProcessed,
+    findAttachment: findAttachment,
     ensureFolder: ensureFolder, findFile: findFile, putFile: putFile, putJson: putJson,
     readJson: readJson, readPrevious: readPrevious, pruneFacts: pruneFacts,
     dataAge: dataAge, freshnessLine: freshnessLine, isStale: isStale,
