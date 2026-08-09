@@ -170,14 +170,34 @@ module.exports = {
   run: run,
 };
 
+/**
+ * `deploy.js --library` 가 남긴 실제 배포 번호.
+ *
+ * ⚠️ 번호를 손으로 넘기는 자리가 여기 하나 남아 있었다. 이 파이프라인이
+ *    없애려던 게 정확히 "사람이 숫자를 옮겨 적는 것" 인데, 마지막 한 곳에서
+ *    다시 옮겨 적고 있었다. 인자를 주면 그걸 쓰고, 안 주면 여기서 읽는다.
+ */
+function deployedVersion() {
+  const p = path.join(ROOT, 'build', '.deployed.json');
+  if (!fs.existsSync(p)) return null;
+  return String(JSON.parse(fs.readFileSync(p, 'utf8')).libVersion);
+}
+
 if (require.main === module) {
   const argv = process.argv.slice(2);
-  const libVersion = argv[0];
+  const given = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
+  const libVersion = given || deployedVersion();
   const i = argv.indexOf('--note');
   const note = i === -1 ? '' : argv[i + 1];
 
+  if (given && deployedVersion() && given !== deployedVersion()) {
+    console.error('✖ 준 번호(' + given + ')가 방금 배포한 번호(' + deployedVersion() + ')와 다르다');
+    process.exit(1);
+  }
+
   if (!libVersion) {
-    console.error('사용법: node scripts/record-deploy.js <라이브러리번호> [--note "한 줄"]');
+    console.error('사용법: node scripts/record-deploy.js [라이브러리번호] [--note "한 줄"]');
+    console.error('  번호를 생략하면 build/.deployed.json 에서 읽는다 (--library 를 먼저 돌린 경우)');
     process.exit(1);
   }
   try {

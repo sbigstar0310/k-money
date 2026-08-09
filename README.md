@@ -1,6 +1,6 @@
 # 돈동생 &middot; [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-현재 버전 **0.4.3** · [바뀐 것들](CHANGELOG.md)
+현재 버전 **0.4.4** · [바뀐 것들](CHANGELOG.md)
 
 돈동생은 뱅크샐러드 데이터를 정리해서 내 구글 드라이브에 놓아주는 도구예요.
 이미 쓰고 있는 Claude나 ChatGPT가 그걸 읽고 내 자산 얘기를 같이 해줘요.

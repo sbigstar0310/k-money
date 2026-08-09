@@ -140,11 +140,19 @@ function readBuild(target, names) {
   });
 }
 
-/** `--library` 가 남긴 실제 배포 번호. 사람이 두 숫자를 눈으로 맞추지 않게 한다. */
+/**
+ * `--library` 가 남긴 실제 배포 번호. 사람이 두 숫자를 눈으로 맞추지 않게 한다.
+ *
+ * 커밋이 다르면 무시한다 — 다른 커밋에서 배포한 번호를 이번 템플릿에 박으면
+ * 유저가 엉뚱한 라이브러리를 받는다. 없는 것보다 낡은 게 나쁘다.
+ */
 function readDeployed() {
   const p = path.join(BUILD, '.deployed.json');
   if (!fs.existsSync(p)) return null;
-  return String(JSON.parse(fs.readFileSync(p, 'utf8')).libVersion);
+  const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const head = require('./build-deploy').gitHead();
+  if (head && d.gitHead && d.gitHead !== head) return null;
+  return String(d.libVersion);
 }
 
 function findManifest(files) {
@@ -273,7 +281,7 @@ async function deployLibrary(token, cfg, description, opts) {
   }
 
   fs.writeFileSync(path.join(BUILD, '.deployed.json'),
-    JSON.stringify({ libVersion: version, deploymentId: dep.deploymentId }, null, 2) + '\n');
+    JSON.stringify({ libVersion: version, deploymentId: dep.deploymentId, gitHead: build.gitHead() }, null, 2) + '\n');
 
   return { version: version, deploymentId: dep.deploymentId, files: files.length };
 }

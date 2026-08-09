@@ -85,8 +85,8 @@ function copyFiles(target, names, destDir) {
 /**
  * 템플릿 매니페스트에 라이브러리 배포 번호를 주입한다.
  *
- * ⚠️ 이 값을 손으로 적으려다 **두 번 연속 틀렸다** (3인 줄 알았는데 4,
- *    5인 줄 알았는데 7). 틀리면 유저는 **오류 없이 옛 코드로 돈다.**
+ * ⚠️ 이 값을 손으로 적으려다 **세 번 연속 틀렸다** (3→4, 5→7, 8→9).
+ *    틀리면 유저는 **오류 없이 옛 코드로 돈다.**
  *    그래서 배포 API 가 돌려준 번호만 여기로 들어온다.
  */
 function writeTemplateManifest(destDir, libVersion) {
@@ -157,8 +157,32 @@ function assertFresh(target, dest) {
   return stamp;
 }
 
+/**
+ * 배포 기록(`.deployed.json`)은 빌드 산물이 아니라 **원격에서 일어난 사실**이다.
+ *
+ * ⚠️ 이걸 몰라서 파이프라인이 문서대로는 완주할 수 없었다. 7절이
+ *    `build-deploy.js --lib-version N` 을 먼저 돌리는데, 그 첫 줄 `rmrf` 가
+ *    5절이 남긴 기록을 지워서 `deploy.js --template` 이 "어느 번호를 기대하는지
+ *    모른다" 로 죽었다. **그 자리는 라이브러리 버전이 이미 영구 생성된 뒤**라,
+ *    스킬이 "가장 조용한 실패" 라 부른 상태로 좌초한다.
+ *
+ * 그래서 rmrf 를 건너뛰고 다시 놓는다. 다만 **커밋이 바뀌면 버린다** — 다른
+ * 커밋에서 만든 배포 기록을 들고 있으면 그게 더 나쁘다.
+ */
+function carryDeployed(out) {
+  const p = path.join(out, '.deployed.json');
+  if (!fs.existsSync(p)) return null;
+  try {
+    const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return d.gitHead === gitHead() ? d : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function build(libVersion, dest) {
   const out = dest || OUT;
+  const carried = carryDeployed(out);
   rmrf(out);
 
   const result = {};
@@ -184,7 +208,17 @@ function build(libVersion, dest) {
   fs.writeFileSync(path.join(out, '.built.json'),
     JSON.stringify({ gitHead: gitHead(), libVersion: pinned }, null, 2) + '\n');
 
-  return { files: result, libVersion: pinned, hasSnapshot: fs.existsSync(snapshot) };
+  // 같은 커밋에서 이미 배포했다면 그 기록을 되돌려 놓는다.
+  if (carried) {
+    fs.writeFileSync(path.join(out, '.deployed.json'), JSON.stringify(carried, null, 2) + '\n');
+  }
+
+  return {
+    files: result,
+    libVersion: pinned,
+    hasSnapshot: fs.existsSync(snapshot),
+    carriedDeploy: carried ? String(carried.libVersion) : null,
+  };
 }
 
 module.exports = {
@@ -193,6 +227,7 @@ module.exports = {
   OUT: OUT,
   build: build,
   assertFresh: assertFresh,
+  gitHead: gitHead,
 };
 
 if (require.main === module) {

@@ -104,8 +104,9 @@ diff 를 직접 읽고 판단한다. 하나라도 걸리면 🔴 이다.
 
 ## 🚦 점검 1 — 릴리스 계획
 
-`Agent` 를 **`Explore`(읽기 전용)로 셋** 띄운다. 심판이 저장소를 고칠 수 있으면
-게이트가 아니다.
+`Agent` 를 **`Explore`(읽기 전용) · `model: sonnet` 으로 셋** 띄운다.
+심판이 저장소를 고칠 수 있으면 게이트가 아니고, 판정은 대조 작업이라
+큰 모델이 필요 없다 — 토큰은 판단이 아니라 확인에 쓰인다.
 
 > **집계는 AND 다. 하나라도 FAIL 이면 중단한다.**
 >
@@ -173,7 +174,7 @@ node scripts/build-deploy.js
 
 ## 🚦 점검 2 — 나가기 직전
 
-**여기부터 밖으로 나간다.** `Explore` 하나를 띄운다. FAIL 이면 중단.
+**여기부터 밖으로 나간다.** `Explore` 하나를 `model: sonnet` 으로 띄운다. FAIL 이면 중단.
 
 기계가 이미 보는 것은 **묻지 않는다** — 스코프·`developmentMode`·`core.gs` 최신성·
 파일 목록은 `npm run check` 가 결정론적으로 강제한다(`test/release.test.js`).
@@ -191,14 +192,18 @@ node scripts/deploy.js --library
 ```
 
 원격 매니페스트를 읽어 대조하고 → 파일을 올리고 → **버전을 만들어 번호를 받고** →
-배포를 그 버전에 걸고 → 되읽어 바이트 대조한다. 하나라도 어긋나면 죽는다.
+배포를 그 버전에 걸고 → 되읽어 대조한다. 하나라도 어긋나면 죽는다.
+
+> `.gs` 는 바이트로 비교하지만 **매니페스트는 파싱해서 본다.** JSON 은 다시
+> 찍어내면 들여쓰기가 달라지는데 그건 내용의 차이가 아니고, 바이트로 보면
+> 매번 틀렸다고 나와서 경보가 무의미해진다. "바이트 대조" 라고 뭉뚱그리지 마라.
 
 마지막 줄 `LIBRARY_VERSION=N` 에서 번호를 가져온다. **화면에서 읽지 않는다.**
 
 ## 6. 번호를 세 곳에 적는다
 
 ```sh
-node scripts/record-deploy.js <N> --note "<한 줄 요약>"
+node scripts/record-deploy.js --note "<한 줄 요약>"   # 번호는 .deployed.json 에서 읽는다
 ```
 
 CHANGELOG 의 `대기`, `docs/deploy.md` 이력표, `appsscript/appsscript.json` 의
@@ -210,6 +215,10 @@ CHANGELOG 의 `대기`, `docs/deploy.md` 이력표, `appsscript/appsscript.json`
 node scripts/build-deploy.js --lib-version <N>
 node scripts/deploy.js --template
 ```
+
+> 빌드가 `build/` 를 통째로 지우지만 **배포 기록(`.deployed.json`)은 살려 둔다** —
+> 같은 커밋일 때만. 이걸 안 하면 `--template` 이 "어느 번호를 기대하는지 모른다" 로
+> 죽는데, 그 자리는 **라이브러리 버전이 이미 영구 생성된 뒤**다.
 
 `container.gs` 와 매니페스트가 **한 요청으로** 나간다. 그리고 매니페스트가 가리키는
 번호가 방금 배포한 N 과 다르면 스스로 죽는다.

@@ -106,6 +106,50 @@ test('스탬프가 없으면 배포 전에 죽는다', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('다시 빌드해도 배포 기록이 살아남는다 (같은 커밋일 때)', () => {
+  // ⚠️ 이게 파이프라인을 못 끝내게 하던 버그다. 7절이 --lib-version 으로
+  //    다시 빌드하는데 rmrf 가 5절의 기록을 지워서, --template 이 "어느 번호를
+  //    기대하는지 모른다" 로 죽었다. 그 자리는 **라이브러리 버전이 이미 영구
+  //    생성된 뒤**라 되돌릴 수 없다.
+  const dir = tmpOut();
+  build.build(null, dir);
+  fs.writeFileSync(path.join(dir, '.deployed.json'),
+    JSON.stringify({ libVersion: 14, deploymentId: 'AKfycbx', gitHead: build.gitHead() }));
+
+  const out = build.build('14', dir);
+  assert.equal(out.carriedDeploy, '14', '다시 빌드하면서 배포 기록이 사라졌다');
+  assert.ok(fs.existsSync(path.join(dir, '.deployed.json')));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('커밋이 다르면 배포 기록을 버린다', () => {
+  // 다른 커밋에서 배포한 번호를 이번 템플릿에 박으면 유저가 엉뚱한
+  // 라이브러리를 받는다. 없는 것보다 낡은 게 나쁘다.
+  const dir = tmpOut();
+  build.build(null, dir);
+  fs.writeFileSync(path.join(dir, '.deployed.json'),
+    JSON.stringify({ libVersion: 14, gitHead: 'deadbeef' }));
+
+  const out = build.build('14', dir);
+  assert.equal(out.carriedDeploy, null, '다른 커밋의 배포 기록이 살아남았다');
+  assert.ok(!fs.existsSync(path.join(dir, '.deployed.json')));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('AI 드라이브 커넥터 범위가 SECURITY.md 에 적혀 있다', () => {
+  // ⚠️ 이 사실은 한때 install.md 에만 있었고, 안내를 줄이면서 **저장소에서
+  //    통째로 사라졌었다.** 설치 안내는 방법 1 을 (권장) 이라 하고 README 는
+  //    "나만 볼 수 있습니다" 라고 하는데, 그 둘을 상쇄하던 유일한 문장이었다.
+  //
+  //    install.md 에 다시 넣지 않는 것은 의도다 — 설치 화면에서 겁을 주지
+  //    않기로 했다. 대신 위험을 모아 두는 자리에 둔다. 다만 **어느 문서에도
+  //    없는 상태로는 돌아가지 않는다.** 그게 이 테스트가 있는 이유다.
+  const md = fs.readFileSync(path.join(ROOT, 'SECURITY.md'), 'utf8');
+  assert.match(md, /돈동생.{0,3}폴더 밖|폴더뿐 아니라/,
+    'SECURITY.md 에서 AI 드라이브 커넥터 범위 설명이 사라졌다');
+  assert.match(md, /방법 2/, '대안(파일 직접 올리기)을 가리키지 않는다');
+});
+
 test('appsscript/ 의 모든 .gs 가 어디로 갈지 정해져 있다', () => {
   // ⚠️ 화이트리스트의 반대 방향 실패다. 새 .gs 를 추가하고 TARGETS 에 넣는
   //    걸 잊으면 로컬 테스트는 전부 통과하고 **배포된 라이브러리에서만**
