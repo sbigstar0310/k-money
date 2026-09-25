@@ -742,6 +742,9 @@ test('AGENT.md — 옛 컨테이너 사본에는 1분·2분을 말하지 않는�
   assert.match(daily, /이미 최신입니다/);
   assert.match(daily, /새로 내보낸 게 없어요/);
   assert.match(daily, /`돈동생-상태\.json` 의 `message`/);
+  // ⚠️ 공통 부분에 "받자마자" 로 읽히는 말이 섞이면 같은 문서 안에서 하루 한 번과
+  //    부딪힌다. 릴리스 심사가 도입부의 "받을 때마다" 를 이렇게 잡았다.
+  assert.doesNotMatch(A.AGENT_GUIDE_DAILY, /받을 때마다|받자마자|곧바로 정리/);
   // 나머지는 원본과 같다. 바뀐 건 "갱신해줘" 절뿐이어야 한다.
   const cut = (t) => t.split('## "갱신해줘" 라고 하면')[0] + t.split('Gmail 커넥터가 없으면')[1];
   assert.equal(cut(daily), cut(A.AGENT_GUIDE));

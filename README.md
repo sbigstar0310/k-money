@@ -1,6 +1,6 @@
 # 돈동생 &middot; [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-현재 버전 **0.4.5** · [바뀐 것들](CHANGELOG.md)
+현재 버전 **0.4.6** · [바뀐 것들](CHANGELOG.md)
 
 뱅크샐러드 데이터를 내 구글 드라이브에 정리해 두면, 이미 쓰는 Claude·ChatGPT·Gemini가 읽고 내 돈 얘기를 같이 해줘요.
 
