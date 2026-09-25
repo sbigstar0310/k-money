@@ -3,9 +3,9 @@
     "deny": [
       "Read(//Users/*/.config/k-money/**)",
       "Read(./secrets/**)",
-      "Bash(cat:*deploy.json*)",
-      "Bash(cat:*client_secret*)",
-      "Bash(cat:*gmail_token*)"
+      "Bash(cat *deploy.json*)",
+      "Bash(cat *client_secret*)",
+      "Bash(cat *gmail_token*)"
     ],
     "allow": [
       "Bash(npm run check)",
