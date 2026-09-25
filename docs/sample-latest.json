@@ -618,5 +618,6 @@
     "currency": "KRW. 원 단위 정수."
   },
   "generatedAt": "2026-06-30T22:00:00.000Z",
-  "sourceMessageId": "sample"
+  "sourceMessageId": "sample",
+  "sourceMessageDate": "2026-06-30T21:58:00.000Z"
 }

@@ -173,15 +173,104 @@ test('onOpen — 정상이면 라이브러리가 준 목록대로 만든다', ()
 
 test('트리거와 메뉴가 이름으로 참조하는 함수가 전부 있다', () => {
   // 이미 설치된 유저의 트리거가 'runDaily' 를 문자열로 가리키고 있다.
-  // 이름을 바꾸면 그 사람들의 자동 실행이 조용히 멈춘다.
-  ['onOpen', 'runDaily', 'menu_setup', 'menu_runNow', 'menu_setPassword',
+  // 이름을 바꾸면 그 사람들의 자동 실행이 조용히 멈춘다. 새로 거는 건 'tick' 이다.
+  ['onOpen', 'tick', 'runDaily', 'menu_setup', 'menu_runNow', 'menu_setPassword',
     'menu_status', 'menu_version', 'menu_ask',
     'menu_slot1', 'menu_slot2', 'menu_slot3'].forEach((fn) => {
     assert.match(CODE, new RegExp('function\\s+' + fn + '\\s*\\('), fn + ' 이 없다');
   });
   // 문자열은 CODE 에서 지워지므로 원문에서 본다.
-  assert.match(SRC, /newTrigger\(\s*'runDaily'\s*\)/, '트리거 핸들러 이름이 바뀌었다');
+  assert.match(SRC, /newTrigger\(\s*'tick'\s*\)/, '트리거 핸들러 이름이 바뀌었다');
 });
+
+// ── 트리거 ────────────────────────────────────────────────────────
+
+/** 프로젝트 트리거 목록을 들고 있는 ScriptApp. 만든 것·지운 것을 센다. */
+function fakeScriptApp(handlers) {
+  const list = handlers.map((h) => ({ getHandlerFunction: () => h }));
+  const made = [];
+  return {
+    list, made,
+    getProjectTriggers: () => list.slice(),
+    deleteTrigger(t) { list.splice(list.indexOf(t), 1); },
+    newTrigger(h) {
+      const spec = { handler: h };
+      const b = {
+        timeBased() { return b; },
+        everyMinutes(n) { spec.minutes = n; return b; },
+        everyDays(n) { spec.days = n; return b; },
+        atHour(n) { spec.hour = n; return b; },
+        create() { made.push(spec); list.push({ getHandlerFunction: () => h }); },
+      };
+      return b;
+    },
+  };
+}
+
+test('installTrigger_ — 옛 runDaily 트리거를 지우고 1분짜리 tick 하나만 건다', () => {
+  // 옛 사본은 매일 7시 runDaily 를 걸어 뒀다. 그걸 남기면 하루 한 번 겹쳐 돈다.
+  // 남의 트리거(다른 이름)는 건드리지 않는다 — 유저가 직접 건 것일 수 있다.
+  const SA = fakeScriptApp(['runDaily', 'myOwnThing']);
+  loadContainer({ ScriptApp: SA }).installTrigger_();
+  assert.deepEqual(SA.made, [{ handler: 'tick', minutes: 1 }]);
+  assert.deepEqual(SA.list.map((t) => t.getHandlerFunction()).sort(), ['myOwnThing', 'tick']);
+});
+
+test('installTrigger_ — 설정을 다시 눌러도 tick 이 겹치지 않는다', () => {
+  // 겹치면 1분에 두 번씩 돌아 하루 할당량(90분)을 두 배로 먹는다.
+  const SA = fakeScriptApp([]);
+  const ctx = loadContainer({ ScriptApp: SA });
+  ctx.installTrigger_();
+  ctx.installTrigger_();
+  ctx.installTrigger_();
+  assert.deepEqual(SA.list.map((t) => t.getHandlerFunction()), ['tick']);
+});
+
+test('installTrigger_ — 주기는 라이브러리가 바꿀 수 있다', () => {
+  // 이 파일은 못 고친다. 주기를 여기 박아 두면 바꾸려고 유저가 시트를 새로 떠야 한다.
+  const SA = fakeScriptApp([]);
+  loadContainer({ ScriptApp: SA }).installTrigger_(5);
+  assert.deepEqual(SA.made, [{ handler: 'tick', minutes: 5 }]);
+});
+
+test('메뉴 설정은 트리거 설치를 콜백으로 넘긴다 — 라이브러리는 이름을 몰라도 된다', () => {
+  // 라이브러리에서 ScriptApp 을 부르면 라이브러리 프로젝트에 걸린다. 그래서
+  // 컨테이너가 함수 자체를 넘기고, 라이브러리는 부르기만 한다.
+  const SA = fakeScriptApp(['runDaily']);
+  let got = null;
+  const ctx = loadContainer(Object.assign(envStubs(), {
+    ScriptApp: SA,
+    kmoneylib: fakeLib({ menu(env, key, install) { got = key; install(); } }),
+  }));
+  ctx.menu_setup();
+  assert.equal(got, 'menu_setup');
+  assert.deepEqual(SA.list.map((t) => t.getHandlerFunction()), ['tick']);
+});
+
+test('tick · runDaily — 라이브러리로 넘기기만 하고 env 를 같이 준다', () => {
+  // tick 은 반환값에 기대지 않는다. 모양이 바뀌면 1분마다 던지는데 여기선 못 고친다.
+  const calls = [];
+  const ctx = loadContainer(Object.assign(envStubs(), {
+    kmoneylib: fakeLib({
+      tick(env) { calls.push(['tick', env.tz]); },
+      runDaily(env) { calls.push(['runDaily', env.tz]); return { message: 'ok' }; },
+    }),
+  }));
+  ctx.tick();
+  ctx.runDaily();
+  assert.deepEqual(calls, [['tick', 'Asia/Seoul'], ['runDaily', 'Asia/Seoul']]);
+});
+
+/** 트리거로 돌 때처럼 시트·UI 없이 env_ 가 만들어지게 하는 최소 스텁. */
+function envStubs() {
+  return {
+    PropertiesService: { getScriptProperties: () => ({}) },
+    LockService: { getScriptLock: () => ({}) },
+    GmailApp: {}, DriveApp: {}, Drive: {},
+    SpreadsheetApp: { getActiveSpreadsheet: () => null, getUi: () => null },
+    Session: { getScriptTimeZone: () => 'Asia/Seoul' },
+  };
+}
 
 test('앞으로 쓸 메뉴 슬롯이 남아 있다', () => {
   // 컨테이너는 사본에 복사되면 못 고친다. 여기 없는 이름은 영원히 메뉴에

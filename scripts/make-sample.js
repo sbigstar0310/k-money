@@ -69,6 +69,7 @@ const status = {
 const facts = KM.aggregate.build(KM.parse.extract(H.sheets(txns, status)), { asOf: '2026-06-30' });
 facts.generatedAt = '2026-06-30T22:00:00.000Z';
 facts.sourceMessageId = 'sample';   // 테스트가 이걸로 실데이터 커밋을 막는다
+facts.sourceMessageDate = '2026-06-30T21:58:00.000Z';
 
 const out = path.join(__dirname, '..', 'docs', 'sample-latest.json');
 const json = JSON.stringify(facts, null, 2) + '\n';

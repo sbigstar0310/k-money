@@ -62,6 +62,21 @@ var KMApp = (function () {
     staleDays: 14,        // 이만큼 새 데이터가 없으면 시트 첫 화면에서 경고한다
     // MimeType.GOOGLE_SHEETS 를 쓰지 않는다. 열거형 하나라도 경계를 덜 넘는 게 낫다.
     sheetsMime: 'application/vnd.google-apps.spreadsheet',
+    // 뱅샐 xlsx 를 변환한 네이티브 시트. 뱅샐이 준 행 그대로다 — 우리가
+    // 고치거나 거르지 않는다. "이 결제 뭐였지?" 는 요약 JSON 이 못 답한다.
+    // ⚠️ raw/ 가 아니라 돈동생 폴더에 둔다. raw/ 는 "열지 마세요" 자리다.
+    ledgerName: '돈동생-거래내역',
+    // 달별 거래 파일. '돈동생/거래/거래-2026-08.json'. writeMonths 참고.
+    // ⚠️ 이름이 곧 검색어다 — AI 는 "8월" 을 들으면 '거래-2026-08' 로 찾는다.
+    monthFolder: '거래',
+    monthPrefix: '거래-',
+    tmpPrefix: 'k-money-tmp-',
+    // 하루 정리(상태·메모리·AGENT.md)를 하는 시각. 유저 시간대 기준.
+    upkeepHour: 7,
+    // tick 이 잠금을 기다리는 시간. 1분마다 도는 것이 10초씩 기다리면
+    // 수동 실행과 겹칠 때마다 그만큼 하루 한도(90분)를 태운다.
+    // 못 잡으면 다음 분에 또 온다 — 기다릴 이유가 없다.
+    tickLockMs: 500,
   };
 
   var PROP = {
@@ -72,6 +87,16 @@ var KMApp = (function () {
     // 메모리 파일을 **한 번이라도** 본 날. 상태 파일은 매일 덮이므로
     // "지금 비어 있다" 와 "여태 한 번도 없었다" 를 여기 아니면 못 가른다.
     memorySeen: 'MEMORY_FIRST_SEEN',
+    // ⚠️ 아래 셋은 **버전을 넘어 살아남는 계약**이다 (test/tick.test.js).
+    //    값은 메일 id 가 아니라 **probeKey 가 본 열쇠**다 — 둘은 거의 늘 같지만
+    //    같다고 가정하지 않는다. probeKey 참고.
+    lastMessage: 'LAST_MESSAGE_ID',
+    lastFailed: 'LAST_FAILED_MESSAGE_ID',
+    // 실패 문장. 하루 정리가 상태를 다시 쓸 때 실패를 성공처럼 덮지 않게
+    // 들고 있는다 — 상태 파일을 읽으러 드라이브에 가지 않아도 된다.
+    lastFailedMessage: 'LAST_FAILED_MESSAGE',
+    // 하루 정리를 한 날 (유저 시간대 'yyyy-MM-dd').
+    lastUpkeep: 'LAST_UPKEEP_DATE',
   };
 
   var STATUS_CELL = 'B10';
@@ -107,7 +132,286 @@ var KMApp = (function () {
     var xlsx = openXlsx(zipFile, password);
     if (xlsx.error) return xlsx.error;
 
-    return persist(env, folder, buildFacts(env, folder, raw, xlsx.blob, stamp, found), stamp, found);
+    // 집계가 던지면 buildFacts 가 자기 임시 시트를 치운다. 여기서부터는
+    // 변환본을 **거래내역으로 올릴지 버릴지** 우리가 정한다.
+    var built = buildFacts(env, folder, raw, xlsx.blob, stamp, found);
+    var kept = false;
+    try {
+      var result = persist(env, folder, built.facts, stamp, found);
+      // ⚠️ behind 면 올리지 않는다. 최신본(JSON)은 과거로 안 갔는데 거래내역만
+      //    옛 데이터로 바뀌면, AI 가 두 파일에서 서로 다른 "지금" 을 읽는다.
+      //    달별 파일도 같은 편에 선다 — done 일 때만 쓴다.
+      if (result.step === 'done') {
+        ledgerFirst(built, result);
+        kept = promoteLedger(env, folder, raw, built.sheetId, result);
+        // 거래내역처럼 **못 써도 실행은 성공이다.** 최신본은 이미 썼다.
+        try {
+          result.monthFiles = writeMonths(env, folder,
+            monthRows(built.ledger.values, ledgerTimes(env, built.ledger), env));
+        } catch (e) {
+          result.monthFilesError = String(e && e.message || e).slice(0, 200);
+        }
+      }
+      return result;
+    } finally {
+      if (!kept) trashQuietly(env, built.sheetId);
+    }
+  }
+
+  /**
+   * 변환본을 '돈동생-거래내역' 으로 올리고, 그다음에야 옛것을 버린다.
+   *
+   * ⚠️ **순서가 전부다.** 옛것을 먼저 버리면 그 사이에 실행이 죽었을 때
+   *    (6분 초과) 거래내역이 아예 없는 상태가 된다. 새것이 자리를 잡은 뒤에
+   *    버리면 최악이 "잠깐 두 개" 이고, 그건 다음 실행이 치운다.
+   * ⚠️ 옛것은 실행 **전에** 목록을 떠 둔다. 방금 이름을 바꾼 파일이 이름
+   *    검색에 언제 잡힐지는 드라이브 마음이라, 새것을 이름으로 거르지 않고
+   *    id 로 거른다.
+   * ⚠️ 영구 삭제가 아니라 휴지통이다. 30일 안에 되돌릴 수 있어야 한다.
+   *
+   * 거래내역을 못 올려도 **실행은 성공이다** — 최신본은 이미 썼다.
+   * 대신 결과에 적고 false 를 돌려준다 (그러면 부른 쪽이 변환본을 치운다).
+   */
+  function promoteLedger(env, folder, raw, sheetId, result) {
+    var olds = [];
+    try {
+      var it = folder.getFilesByName(CFG.ledgerName);
+      while (it.hasNext()) olds.push(it.next().getId());
+      // 이름 바꾸기와 옮기기를 요청 하나로. 둘로 나누면 그 사이에 죽었을 때
+      // raw/ 안에 '거래내역' 이름의 파일이 남는다.
+      env.driveApi.Files.update({ name: CFG.ledgerName }, sheetId, null,
+        { addParents: folder.getId(), removeParents: raw.getId() });
+    } catch (e) {
+      result.ledgerError = String(e && e.message || e).slice(0, 200);
+      return false;
+    }
+    olds.forEach(function (id) {
+      if (id === sheetId) return;
+      // 하나 못 버려도 나머지는 버린다. 남은 건 다음 실행이 다시 본다.
+      try { env.drive.getFileById(id).setTrashed(true); } catch (ignored) {}
+    });
+    return true;
+  }
+
+  function trashQuietly(env, id) {
+    if (!id) return;
+    try { env.drive.getFileById(id).setTrashed(true); } catch (ignored) {}
+  }
+
+  /**
+   * 거래내역 시트의 첫 탭을 '가계부 내역' 으로. 다른 탭(뱅샐현황)은 그대로 둔다.
+   *
+   * ⚠️ 드라이브 커넥터의 미리보기는 **첫 탭**을 읽는다. 뱅샐 xlsx 는
+   *    뱅샐현황이 먼저라, 그대로 두면 AI 가 거래를 한 줄도 못 본다.
+   * 못 옮겨도 실행은 성공이다 — 결과에만 적는다.
+   */
+  function ledgerFirst(built, result) {
+    try {
+      var led = built.ledger;
+      if (!led || !led.tab || led.tab.getIndex() === 1) return;
+      built.ss.setActiveSheet(led.tab);
+      built.ss.moveActiveSheet(1);
+    } catch (e) {
+      result.ledgerOrderError = String(e && e.message || e).slice(0, 200);
+    }
+  }
+
+  // ── 달별 거래 파일 ───────────────────────────────────────────────
+  //
+  // ⚠️ **시트로는 거래 하나를 못 찾는다** (실측 2026-09-25). 드라이브 커넥터의
+  //    read_file_content 는 2천 줄 넘는 거래내역에서 60줄쯤의 **표본**만 주고
+  //    다음 쪽이 없다. 다운로드는 파일 전체를 base64 로 대화에 붓는다.
+  //    JSON 은 통째로 읽힌다. 그래서 달마다 하나씩 둔다 — "8월 5일 7만원" 은
+  //    '거래-2026-08.json' 하나만 열면 된다.
+  //
+  // ⚠️ 파싱된 거래(KM.parse.extract)로 만들지 않는다. 거기엔 시간·메모가 없고
+  //    타입은 우리 어휘로 바뀌었고 외화는 따로 빠져 있다. 이 파일은 **뱅샐이 준
+  //    줄 그대로**여야 해서 원본 행에서 만든다. 날짜만 core 의 day() 를 쓴다 —
+  //    달을 가르는 기준이 최신본의 달과 같아야 한다.
+
+  /**
+   * 시간 칸이 **시트에 보이는 글자.** 못 얻으면 null (그러면 값으로 푼다).
+   *
+   * ⚠️ 시각만 있는 셀은 getValues() 가 1899-12-30 의 Date 로 준다. Asia/Seoul 은
+   *    1899 년에 LMT(+8:27:52)라, 그 Date 를 formatDate 로 찍으면 32분 8초가
+   *    밀린다. 화면 글자는 시트가 찍은 그대로라 이 문제가 없다. 열 하나만
+   *    읽는다 — 2천 줄에 호출 한 번이다.
+   */
+  function ledgerTimes(env, ledger) {
+    try {
+      var n = ledger.values.length;
+      if (!n) return null;
+      return ledger.tab.getRange(1, 2, n, 1).getDisplayValues().map(function (r) { return r[0]; });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+  /** '14:05', '오후 2:05', 'PM 2:05:09' → 'HH:mm' 또는 'HH:mm:ss'. 초는 있을 때만. */
+  function timeFromText(s) {
+    var t = String(s).trim();
+    var m = /(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(t);
+    if (!m) return null;
+    var h = Number(m[1]);
+    var pm = /오후|PM/i.test(t), am = /오전|AM/i.test(t);
+    if (pm && h < 12) h += 12;
+    if (am && h === 12) h = 0;
+    return pad2(h) + ':' + m[2] + (m[3] ? ':' + m[3] : '');
+  }
+
+  /**
+   * 화면 글자가 없을 때 값으로 푼다.
+   *
+   * ⚠️ Date 면 **로컬 시·분이나 formatDate 로 읽지 않는다** — 둘 다 1899 년의
+   *    LMT 를 따라 밀린다. 시트는 시각을 **지금의 표준 오프셋**(한국 +9:00)으로
+   *    Date 에 담으므로, UTC 시각에 그 오프셋을 더해 읽는다. 오프셋은 현대
+   *    날짜로 잰다. 진짜 Apps Script 에서는 화면 글자가 있어서 여기 안 온다.
+   */
+  function timeFromValue(v, offsetMs) {
+    if (v === null || v === undefined || v === '') return '';
+    if (typeof v === 'string') return timeFromText(v) || v.trim();
+    if (typeof v === 'number') {
+      var secs = Math.round((v - Math.floor(v)) * 86400) % 86400;
+      return pad2(Math.floor(secs / 3600)) + ':' + pad2(Math.floor(secs / 60) % 60) + ':' + pad2(secs % 60);
+    }
+    if (KM.parse.isDateLike(v)) {
+      var d = new Date(v.getTime() + offsetMs);
+      return pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ':' + pad2(d.getUTCSeconds());
+    }
+    return String(v);
+  }
+
+  /** 유저 시간대의 지금 오프셋(ms). formatDate 한 번. */
+  function tzOffsetMs(env) {
+    var now = new Date(Math.floor(Date.now() / 1000) * 1000);
+    var m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/
+      .exec(Utilities.formatDate(now, env.tz, 'yyyy-MM-dd HH:mm:ss'));
+    if (!m) return 0;
+    return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) - now.getTime();
+  }
+
+  /** 금액 칸 → 숫자. 뱅샐 부호 그대로. 외화 소수점은 살린다. */
+  function amountOf(v) {
+    if (typeof v === 'number') return Math.round(v * 100) / 100;
+    return KM.parse.num(v);
+  }
+
+  /**
+   * 가계부 행 → { 'YYYY-MM': [행, …] }. **시트 순서 그대로**(뱅샐은 최신이 위).
+   * 날짜가 없는 줄은 뺀다 — parse 의 ledger 와 같은 기준이다.
+   */
+  function monthRows(values, times, env) {
+    var out = {};
+    var offset = null;
+    var T = KM.parse.text;
+    for (var i = 1; i < values.length; i++) {
+      var r = values[i];
+      var day = KM.parse.day(r[0]);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+      var shown = times && times[i] !== undefined ? timeFromText(times[i]) : null;
+      var time = shown;
+      if (time === null) {
+        if (offset === null && KM.parse.isDateLike(r[1])) offset = tzOffsetMs(env);
+        time = timeFromValue(r[1], offset || 0);
+      }
+      var ym = day.slice(0, 7);
+      (out[ym] = out[ym] || []).push([day, time, T(r[2]), T(r[3]), T(r[4]), T(r[5]),
+        amountOf(r[6]), T(r[7]), T(r[8]), T(r[9])]);
+    }
+    return out;
+  }
+
+  /**
+   * 달 파일 본문. **한 줄에 거래 하나** — 통째로 한 줄이면 커넥터가 잘라 보여줄
+   * 때 어디서 끊겼는지 모른다. 들여쓰기는 안 한다 (2천 줄이면 토큰이 크다).
+   *
+   * ⚠️ sourceMessageDate 같은 **실행마다 바뀌는 값을 넣지 않는다.** 넣으면 모든
+   *    달이 매번 달라져서 "바뀐 달만 쓴다" 가 무너진다. 신선함은 최신본이 말한다.
+   */
+  function monthJson(ym, rows) {
+    return '{"month":' + JSON.stringify(ym) +
+      ',"columns":' + JSON.stringify(KM.layout.BANKSALAD_V1.ledgerHeader) +
+      ',"count":' + rows.length +
+      ',"rows":[\n' + rows.map(function (r) { return JSON.stringify(r); }).join(',\n') + '\n]}\n';
+  }
+
+  function md5Hex(s) {
+    return Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, s, Utilities.Charset.UTF_8)
+      .map(function (b) { return ((b + 256) % 256 + 0x100).toString(16).slice(1); }).join('');
+  }
+
+  /**
+   * 달마다 '거래/거래-YYYY-MM.json' 을 쓴다. **바뀐 달만.**
+   *
+   * ⚠️ **드라이브 왕복을 센다.** 2천 줄에 이미 24초고 한도는 6분이다.
+   *    폴더 찾기 한 번, 목록 한 번(Files.list 가 md5Checksum 을 같이 준다 —
+   *    파일을 열어 읽지 않고 비교한다), 그리고 바뀐 달만 쓰기. 보통은 이번 달
+   *    하나다.
+   *
+   * ⚠️ **덮어쓰기 규칙.** done 은 behind 가드를 지난 것이라 가진 것보다 옛
+   *    데이터가 아니다 — 그래서 이번 내보내기에 **있는 달은** 이번 것으로 덮는다
+   *    (뱅샐에서 고친 분류·메모가 반영돼야 한다).
+   *    - 이번 내보내기에 **없는 달은 건드리지 않는다.** 뱅샐 창은 1년이라
+   *      옛 달은 여기서만 남는다. 뱅샐에서 한 달치를 통째로 지운 경우에도
+   *      남는데, 지우는 쪽이 틀리면 되돌릴 수 없어서 그쪽을 택했다.
+   *    - **가장 옛 달은 반쪽일 수 있다.** 1년 창은 달 중간에서 시작한다
+   *      (9/25 에 내보내면 작년 9/25 부터). 그 달만 옛 파일을 한 번 읽어서
+   *      이번 첫날보다 앞선 줄을 뒤에 붙인다. 통째로 덮으면 9/1~9/24 가
+   *      사라진다. 첫날이 1일이면 읽지도 않는다.
+   *    - 끝쪽(이번 마지막 날보다 뒤)은 합치지 않는다 — behind 가드가 그런 옛
+   *      파일이 있을 수 없게 막는다.
+   */
+  function writeMonths(env, folder, months) {
+    var keys = Object.keys(months).sort();
+    var info = { months: keys.length, written: 0, unchanged: 0 };
+    if (!keys.length) return info;
+
+    var dir = ensureFolder(folder, CFG.monthFolder);
+    var have = {};
+    var token = null;
+    do {
+      var page = env.driveApi.Files.list({
+        q: "'" + dir.getId() + "' in parents and trashed = false",
+        fields: 'nextPageToken, files(id, name, md5Checksum)',
+        pageSize: 1000, pageToken: token || undefined,
+      });
+      (page.files || []).forEach(function (f) { if (!have[f.name]) have[f.name] = f; });
+      token = page.nextPageToken || null;
+    } while (token);
+
+    // 이번 내보내기의 첫날. 시트 순서를 믿지 않고 가장 옛 달에서 센다.
+    var first = months[keys[0]].reduce(function (a, r) { return r[0] < a ? r[0] : a; }, '9999');
+
+    keys.forEach(function (ym) {
+      var name = CFG.monthPrefix + ym + '.json';
+      var prev = have[name];
+      var rows = months[ym];
+      if (prev && ym === keys[0] && first.slice(8) !== '01') {
+        rows = rows.concat(olderRows(env, prev.id, first));
+      }
+      var content = monthJson(ym, rows);
+      if (prev && prev.md5Checksum && prev.md5Checksum === md5Hex(content)) {
+        info.unchanged++;
+        return;
+      }
+      if (prev) env.drive.getFileById(prev.id).setContent(content);
+      else dir.createFile(Utilities.newBlob(content, 'application/json', name));
+      info.written++;
+    });
+    return info;
+  }
+
+  /** 옛 달 파일에서 before 보다 앞선 줄. 못 읽거나 모양이 다르면 없는 셈 친다. */
+  function olderRows(env, id, before) {
+    try {
+      var old = JSON.parse(env.drive.getFileById(id).getBlob().getDataAsString('UTF-8'));
+      if (JSON.stringify(old.columns) !== JSON.stringify(KM.layout.BANKSALAD_V1.ledgerHeader)) return [];
+      return (old.rows || []).filter(function (r) { return String(r[0]) < before; });
+    } catch (e) {
+      return [];
+    }
   }
 
   /** 2) 해제 — zip 안에서 xlsx 를 꺼낸다. */
@@ -133,28 +437,41 @@ var KMApp = (function () {
   /**
    * 3~4) xlsx → Google Sheets → 집계. 실패하면 던진다 (runGuarded 가 받는다).
    *
-   * 임시 시트는 중간 산물이라 **어떤 경로로 나가든 반드시 치운다.**
-   * 집계가 던져도 finally 가 돈다.
+   * 변환본은 { facts, sheetId } 로 돌려준다 — 거래내역으로 올릴지는
+   * process 가 persist 결과를 보고 정한다.
+   * ⚠️ **던질 때는 여기서 치운다.** 반쯤 변환된 시트가 남으면 다음에 누가
+   *    그걸 거래내역으로 착각한다.
    */
   function buildFacts(env, folder, raw, xlsx, stamp, found) {
     var tmpId = null;
+    var ok = false;
     try {
       tmpId = env.driveApi.Files.create(
-        { name: 'k-money-tmp-' + stamp, mimeType: CFG.sheetsMime, parents: [raw.getId()] },
+        { name: CFG.tmpPrefix + stamp, mimeType: CFG.sheetsMime, parents: [raw.getId()] },
         xlsx
       ).id;
 
       var ss = env.sheets.openById(tmpId);
       var sheets = {};
+      var tabs = {};
       ss.getSheets().forEach(function (s) {
         sheets[s.getName()] = s.getDataRange().getValues();
+        tabs[s.getName()] = s;
       });
+      // 달별 파일과 탭 순서는 done 일 때만 쓴다 — 여기서는 들고만 간다.
+      var L = KM.layout.find(Object.keys(sheets));
+      var ledger = L ? { tab: tabs[L.ledgerSheet], values: sheets[L.ledgerSheet], layout: L } : null;
 
       // node 에서 검증한 그 코드.
       // 개인화는 메모리 폴더의 마크다운으로 간다 — facts 에 싣지 않는다.
       var facts = KM.aggregate.build(KM.parse.extract(sheets), { asOf: stamp });
       facts.generatedAt = new Date().toISOString();
       facts.sourceMessageId = found.id;
+      // AI 가 "갱신해줘" 를 받았을 때 Gmail 커넥터로 본 최신 뱅샐 메일 시각과
+      // 비교하는 값이다. 받은 날(stamp)은 날짜뿐이라 같은 날 두 번 내보내면
+      // 못 가른다. getTime 으로 새로 만든다 — Date 가 경계를 넘어올 때
+      // 무엇이 따라오는지 가정하지 않는다 (맨 위 instanceof 사고).
+      facts.sourceMessageDate = new Date(found.date.getTime()).toISOString();
 
       // 같은 날 두 번 내보내면 최신본과 날짜가 같아 델타가 전부 0이 된다.
       // 그런 날은 그 이전 스냅샷을 찾아서 비교한다.
@@ -162,9 +479,10 @@ var KMApp = (function () {
       //    날(stamp)로 이름 짓는다 — 아래 persist 와 같은 기준이다.
       var d = KM.aggregate.delta(facts, readPrevious(folder, stamp));
       if (d) facts.delta = d;
-      return facts;
+      ok = true;
+      return { facts: facts, sheetId: tmpId, ss: ss, ledger: ledger };
     } finally {
-      if (tmpId) { try { env.drive.getFileById(tmpId).setTrashed(true); } catch (ignored) {} }
+      if (!ok) trashQuietly(env, tmpId);
     }
   }
 
@@ -232,25 +550,82 @@ var KMApp = (function () {
    * ⚠️ 예전엔 runOnceForce 만 잠금 없이 돌았고, 그게 하필 컨테이너에 있어서
    *    이미 사본을 뜬 사람에게는 영영 못 고치는 상태였다. 겹치면 임시 시트가
    *    둘, 최신본 쓰기가 둘이 되고 pruneFacts 가 서로 쓰는 걸 지운다.
+   *
+   * 처리 기록(LAST_MESSAGE_ID)은 **보지 않고** 남기기만 한다. 보는 건 tick
+   * 뿐이다 — 손으로 돌린 것도 기록이 남아야 다음 tick 이 조용하다.
    */
   function runGuarded(env, opts) {
     if (!env.lock.tryLock(10 * 1000)) {
       return { ok: true, step: 'busy', message: '이미 실행 중이라 건너뜁니다.' };
     }
     try {
-      var result = process(env, opts);
-      writeStatus(env, result);
-      return result;
+      // 비밀번호가 없으면 process 가 Gmail 전에 돌아선다. 여기서도 안 본다.
+      var key = env.props.getProperty(PROP.password) ? probeKey(env) : null;
+      return runLocked(env, key);
     } catch (e) {
-      var fail = { ok: false, step: 'unknown', message: String(e && e.message || e) };
-      try { writeStatus(env, fail); } catch (ignored) {}
+      // probeKey 가 던진 경우. runLocked 가 던진 건 거기서 이미 상태를 남겼다.
+      if (!e || !e.kmStatusWritten) {
+        try { writeStatus(env, { ok: false, step: 'unknown', message: String(e && e.message || e) }); } catch (ignored) {}
+      }
       throw e;
     } finally {
       env.lock.releaseLock();
     }
   }
 
-  /** 트리거가 부르는 것. 예외를 삼키지 않되 상태는 반드시 남긴다. */
+  /**
+   * 잠금을 쥔 채로 파이프라인을 한 번 돌리고, 상태와 처리 기록을 남긴다.
+   *
+   * ⚠️ **처리 기록은 끝난 뒤에만 남긴다.** 먼저 남기면 집계 중에 죽었을 때
+   *    (6분 초과, 드라이브 오류) 기록만 남고 다음 tick 이 "이미 처리했다" 며
+   *    넘어간다 — 그 메일은 영영 처리되지 않는다.
+   * ⚠️ key 는 **돌리기 전에** 본 것이다. 도는 사이에 새 메일이 오면 우리는
+   *    그걸 처리했을 수도 있지만 기록은 옛 key 다 — 다음 tick 이 한 번 더
+   *    돈다. 반대(안 본 메일을 처리했다고 적기)보다 이쪽이 안전하다.
+   */
+  function runLocked(env, key) {
+    var result;
+    try {
+      result = process(env, {});
+    } catch (e) {
+      var fail = { ok: false, step: 'unknown', message: String(e && e.message || e) };
+      try { writeStatus(env, fail); } catch (ignored) {}
+      remember(env, key, fail);
+      try { e.kmStatusWritten = true; } catch (ignored) {}
+      throw e;
+    }
+    // 상태 쓰기보다 **먼저** 남긴다. 파이프라인은 끝났다 — 상태 파일 하나를
+    // 못 썼다고 다음 분에 14초짜리를 또 돌 이유가 없다.
+    remember(env, key, result);
+    writeStatus(env, result);
+    return result;
+  }
+
+  /**
+   * 실행 결과를 처리 기록에 남긴다.
+   *
+   * - 성공·behind·idle → 처리한 것. 다음 tick 은 조용하다
+   *   (behind 는 실패가 아니라 지켜낸 것이다. 매분 다시 돌 이유가 없다)
+   * - 실패 → 실패한 것. **같은 메일이면 tick 이 다시 안 돈다.** 틀린
+   *   비밀번호는 유저가 고칠 때까지 계속 틀린다 — 매분 다시 풀면 14초 ×
+   *   1440 으로 하루 한도(90분)를 한낮 전에 다 쓰고, 그다음부터는 맞는 메일이
+   *   와도 안 돈다. 새 메일이나 손으로 돌리기(runForced)가 대기를 푼다
+   * - setup → 아무것도 안 남긴다. 메일을 본 적도 없다
+   */
+  function remember(env, key, result) {
+    if (!key || result.step === 'setup') return;
+    if (result.ok) {
+      env.props.setProperty(PROP.lastMessage, key);
+      env.props.deleteProperty(PROP.lastFailed);
+      env.props.deleteProperty(PROP.lastFailedMessage);
+    } else {
+      env.props.setProperty(PROP.lastFailed, key);
+      // 스크립트 속성은 값 하나에 9KB 까지다. 문장 하나면 충분하다.
+      env.props.setProperty(PROP.lastFailedMessage, String(result.message || '').slice(0, 500));
+    }
+  }
+
+  /** 옛 트리거(매일 7시)가 부르는 것. 예외를 삼키지 않되 상태는 반드시 남긴다. */
   function runDaily(env) {
     return runGuarded(env, {});
   }
@@ -260,13 +635,130 @@ var KMApp = (function () {
    *
    * 처리 이력이 없어진 뒤로 runDaily 와 하는 일이 같다. 이름을 남겨 두는 건
    * container.gs 의 runOnceForce 와 메뉴가 부르고 있어서다 — 사본을 이미 뜬
-   * 사람의 컨테이너는 못 고친다.
+   * 사람의 컨테이너는 못 고친다. 실패 대기(LAST_FAILED_MESSAGE_ID)도 안 본다 —
+   * 비밀번호만 고친 사람에게 남은 유일한 복구 경로다.
    */
   function runForced(env) {
     return runGuarded(env, {});
   }
 
+  // ── tick — 1분마다 ───────────────────────────────────────────────
+  //
+  // ⚠️ **하루 1440번 돈다.** 트리거 실행 시간 한도는 하루 90분이고, 라이브러리를
+  //    붙인 채 아무것도 안 하는 실행이 이미 1.4초쯤이다 (실측). 파이프라인 한
+  //    번은 14초. 그래서 이 함수의 거의 전부는 **아무것도 안 하는 경로**를
+  //    싸게 만드는 일이다.
+  //
+  //    새 메일이 없으면: 잠금 → Gmail 검색 하나 → 속성 비교 → 끝.
+  //    드라이브도 시트도 안 연다. 상태 파일도 안 쓴다 — 매분 쓰면 수정시각이
+  //    하루 1440번 흔들리고 커넥터가 폴더를 "방금 바뀐 것" 으로 읽는다.
+  //
+  //    대신 하루 한 번(유저 시간대 07:00 이후 첫 tick)은 상태를 쓴다. 유저가
+  //    내보내기를 그만뒀을 때 "데이터가 멈춰 있어요" 를 띄울 자리가 그것뿐이다.
+
+  /**
+   * 1분 트리거가 부르는 것.
+   *
+   * 돌려주는 step: setup · busy · idle · waiting(실패한 같은 메일) · 그리고
+   * 새 메일이면 process 의 것(done · behind · decrypt …).
+   */
+  function tick(env) {
+    // ⚠️ 비밀번호가 없으면 아무것도 안 한다. 잠금도 Gmail 도 안 본다.
+    //    설정 전에 트리거만 걸린 사본이 매분 상태를 쓰면 빈 폴더가 생긴다.
+    //    유저는 메뉴 ① 을 누를 때 안내를 받는다.
+    if (!env.props.getProperty(PROP.password)) {
+      return { ok: true, step: 'setup', message: '비밀번호가 아직 없어요. 메뉴에서 ① 처음 설정하기 를 눌러 주세요.' };
+    }
+    if (!env.lock.tryLock(CFG.tickLockMs)) {
+      return { ok: true, step: 'busy', message: '이미 실행 중이라 건너뜁니다.' };
+    }
+    try {
+      var now = nowOf(env);
+      var key = probeKey(env);
+      var done = env.props.getProperty(PROP.lastMessage);
+      var failed = env.props.getProperty(PROP.lastFailed);
+
+      if (key && key !== done && key !== failed) {
+        var result = runLocked(env, key);
+        // 방금 상태를 썼다. 07:00 이후라면 그게 오늘의 정리다.
+        if (upkeepDue(env, now)) env.props.setProperty(PROP.lastUpkeep, localDay(env, now));
+        return result;
+      }
+
+      var quiet = !key
+        ? { ok: true, step: 'idle',
+            message: '받은 뱅크샐러드 메일이 아직 없어요. 앱에서 「파일로 받기」를 눌러 주세요.' }
+        : key === done
+          ? { ok: true, step: 'idle',
+              message: '새 내보내기가 없어요. 받은 데이터 그대로예요.' }
+          // ⚠️ **대기는 성공이 아니다.** 하루 정리가 이걸 상태에 쓸 때 ✅ 가 붙으면
+          //    틀린 비밀번호가 다음 날 아침 조용히 "정상" 으로 덮인다.
+          //    지난 실패 문장을 그대로 들고 간다.
+          : { ok: false, step: 'waiting',
+              message: (env.props.getProperty(PROP.lastFailedMessage) || '지난번 메일을 처리하지 못했어요.') +
+                ' — 같은 메일이라 다시 시도하지 않았어요. 고친 뒤 \'② 지금 한 번 돌리기\' 를 ' +
+                '누르거나, 뱅크샐러드에서 다시 내보내 주세요.' };
+
+      if (upkeepDue(env, now)) {
+        // ⚠️ 표시를 **먼저** 남긴다. 상태 쓰기가 드라이브 오류로 던지면, 표시가
+        //    없을 때 그날 남은 tick 이 전부 다시 시도한다 — 매분 몇 초씩.
+        env.props.setProperty(PROP.lastUpkeep, localDay(env, now));
+        writeStatus(env, quiet);
+      }
+      return quiet;
+    } finally {
+      env.lock.releaseLock();
+    }
+  }
+
+  /** 테스트가 시각을 넣을 수 있게. 함수든 Date 든 받는다. */
+  function nowOf(env) {
+    if (typeof env.now === 'function') return env.now();
+    return env.now || new Date();
+  }
+
+  /**
+   * ⚠️ **날짜는 유저 시간대로 센다.** 한국 07:30 은 UTC 로 전날 22:30 이다.
+   *    UTC 나 서버 시각으로 세면 "그날은 이미 했다" 며 하루를 통째로 건너뛴다.
+   */
+  function localDay(env, d) {
+    return Utilities.formatDate(d, env.tz, 'yyyy-MM-dd');
+  }
+
+  /** 오늘(유저 시간대) 아직 정리를 안 했고 07:00 이 지났나. 늦게라도 한 번은 한다. */
+  function upkeepDue(env, now) {
+    if (Number(Utilities.formatDate(now, env.tz, 'H')) < CFG.upkeepHour) return false;
+    return env.props.getProperty(PROP.lastUpkeep) !== localDay(env, now);
+  }
+
   // ── Gmail ────────────────────────────────────────────────────────
+
+  /**
+   * "새 메일이 왔나" 를 보는 가장 싼 열쇠. **가장 최근 스레드의 마지막 메일 id.**
+   *
+   * 검색 하나(스레드 1개) + getMessages 하나. 첨부는 안 연다 — 첨부를 여는 건
+   * 메일마다 왕복이고, 이건 하루 1440번 돈다.
+   *
+   * ⚠️ **처리할 메일(findAttachment)과 같은 것을 고르려고 하지 않는다.**
+   *    findAttachment 는 스레드 10개를 뒤져 zip 이 붙은 가장 최근 메일을 고르고,
+   *    여기는 맨 위 스레드 하나만 본다. 스레드는 **마지막 활동 순**이라 옛 zip
+   *    스레드에 답장 하나만 달려도 둘이 갈린다. 둘을 비교하면 영영 "새 메일"
+   *    이라 매분 14초를 돌거나, 반대로 영영 못 돈다.
+   *    그래서 **이 열쇠는 비교에만 쓰고, 처리 뒤에도 이 열쇠를 그대로 적는다**
+   *    (remember). 같은 함수가 쓰고 같은 함수가 읽으니 어긋날 수가 없다.
+   *    처리 자체는 언제나 findAttachment 가 고른 가장 최근 zip 이다 — 과거로
+   *    걸어가지 않는다 (아래 findAttachment 의 ⚠️).
+   *
+   *    새 zip 메일이 오면 그 메일이 전체에서 가장 최근이니 그 스레드가 맨
+   *    위로 오고 열쇠가 바뀐다 — 놓치지 않는다. 답장 같은 딴 메일이 와도
+   *    열쇠가 바뀌는데, 그러면 한 번 더 돌고(같은 결과) 다시 조용해진다.
+   */
+  function probeKey(env) {
+    var threads = env.gmail.search(CFG.gmailQuery, 0, 1);
+    if (!threads || !threads.length) return null;
+    var messages = threads[0].getMessages();
+    return messages.length ? messages[messages.length - 1].getId() : null;
+  }
 
   /**
    * 메일함에서 **무조건 가장 최근** 뱅샐 zip 메일을 고른다.
@@ -397,7 +889,7 @@ var KMApp = (function () {
       "# 돈동생 — 가계부 폴더를 읽고, 사용자를 기억하는 법",
       "",
       "여기는 **돈동생**이 만든 폴더입니다. 한국의 가계부 앱(뱅크샐러드)에서 내보낸",
-      "거래 내역을 매일 정리해 둡니다. 이 파일을 먼저 읽고 시작하세요.",
+      "거래 내역을 받을 때마다 정리해 둡니다. 이 파일을 먼저 읽고 시작하세요.",
       "",
       "기간은 사용자가 뱅크샐러드에서 고릅니다(최소 1년). **얼마나 담겼는지는",
       "`돈동생-최신.json`의 `period`를 보세요.** 몇 년치라고 넘겨짚지 마세요.",
@@ -409,6 +901,8 @@ var KMApp = (function () {
       "## 폴더가 어떻게 쓰이나",
       "",
       "- `돈동생-최신.json` 에 숫자가 있습니다",
+      "- `거래/` 에 거래 한 줄 한 줄이 **달마다 한 파일**로 있습니다 (`거래-YYYY-MM.json`)",
+      "- `돈동생-거래내역` 은 같은 거래를 구글 시트로 둔 것입니다 (사람이 보는 용도)",
       "- `메모리/` 에는 사용자가 지난 대화에서 알려준 사실이 있습니다.",
       "  **답하기 전에 읽어 두면** 사용자가 같은 설명을 되풀이하지 않아도 됩니다",
       "- 이번 대화에서 새로 알게 된 것이 있으면 `메모리/` 에 더할 수 있습니다.",
@@ -419,10 +913,25 @@ var KMApp = (function () {
       "| 파일 | 무엇 |",
       "|---|---|",
       "| `돈동생-최신.json` | **이걸 읽으세요.** 가장 최근 집계 |",
+      "| `거래/거래-YYYY-MM.json` | 그 달의 거래 전부. \"8월 5일 7만원 뭐였어?\", \"그 가게에서 언제 썼지?\" 처럼 **거래 하나나 한 달을 볼 때** 여세요. 합계·평균은 최신본이 이미 계산해 뒀어요 |",
+      "| `돈동생-거래내역` | 뱅크샐러드가 준 거래 내역 그대로(구글 시트). **열면 최근 몇십 줄만 보입니다** — 거기 없다고 거래가 없는 게 아니에요 |",
       "| `돈동생-YYYY-MM-DD.json` | 지난 기록(최근 12개). 지난번과의 차이는 이미 최신본의 `delta` 에 있어요 — 여기까지 열 일은 드뭅니다 |",
       "| `메모리/` | 사용자에 대해 알게 된 것. **읽고, 그리고 쓰는 곳입니다** |",
       "| `돈동생-상태.json` | 마지막 실행 결과. 사용자가 \"왜 안 돌아?\" 물을 때만 |",
       "| `raw/` | 원본 zip. 열지 마세요 |",
+      "",
+      "## 거래 하나를 찾을 때",
+      "",
+      "`돈동생-거래내역` 시트는 열어도 **최근 거래 몇십 줄만 보입니다.** 나머지는 안 보이고",
+      "다음 쪽도 없어요. 그러니 특정 거래나 특정 달을 물으면 **그 달의 파일을 여세요.**",
+      "`거래` 폴더 안에서 **제목으로 찾으면** 됩니다 — 2026년 8월이면 `거래-2026-08.json`.",
+      "",
+      "- `columns` 가 칸 이름, `rows` 가 거래입니다. **최신이 위**예요",
+      "- `count` 가 그 달 거래 수입니다. `rows` 개수와 다르면 파일이 잘려서 읽힌 거예요",
+      "- 금액은 뱅크샐러드 부호 그대로입니다 (지출은 보통 음수)",
+      "- 시간은 뱅크샐러드 화면에 보이는 그대로입니다",
+      "- 파일이 없는 달은 거래가 없었거나, 내보낸 기간 밖입니다",
+      "- 뱅크샐러드 내보내기는 1년치까지지만, 한 번 받은 달의 파일은 **계속 남습니다**",
       "",
       "## 데이터가 오래됐을 때",
       "",
@@ -433,6 +942,28 @@ var KMApp = (function () {
       "",
       "내보내는 법: 뱅크샐러드 앱 → 가계부 → 톱니바퀴 → 파일로 받기 →",
       "설치할 때 쓴 구글 주소로, 같은 비밀번호로.",
+      "",
+      "## \"갱신해줘\" 라고 하면",
+      "",
+      "**새 데이터는 사용자가 뱅크샐러드 앱에서 내보내기를 눌러야만 생깁니다.**",
+      "당신도 돈동생도 뱅크샐러드에서 데이터를 끌어올 수 없어요. 돈동생은 1분마다",
+      "메일함을 보고, 내보내기 메일이 오면 2분쯤 안에 이 폴더를 새로 씁니다.",
+      "",
+      "그러니 \"갱신해줘\", \"최신으로 해줘\" 를 받으면 **Gmail 커넥터로 뱅크샐러드의 가장",
+      "최근 내보내기 메일 시각**을 보고, `돈동생-최신.json` 의 `sourceMessageDate`",
+      "(돈동생이 마지막으로 처리한 메일의 시각, UTC)와 비교해서 셋 중 하나로 답하세요.",
+      "",
+      "- 같으면 → **이미 최신입니다.** 더 새로 받으려면 앱에서 다시 내보내야 해요",
+      "- 메일이 더 나중이면 → \"HH:MM 에 온 내보내기가 있어요. 2분쯤 안에 반영됩니다\"",
+      "  (시각은 사용자 시간대로). 조금 뒤에 다시 읽으세요.",
+      "  **온 지 10분이 넘었는데도 그대로면** 처리에 실패한 겁니다. 반영된다고 하지 말고",
+      "  `돈동생-상태.json` 의 `message` 를 전하세요",
+      "- 최근에 온 메일이 없으면 → \"새로 내보낸 게 없어요. 뱅크샐러드 앱에서",
+      "  파일로 받기를 눌러 주세요\" 와 위의 내보내는 법",
+      "",
+      "Gmail 커넥터가 없으면 그렇다고 말하고, `sourceMessageDate` 가 언제인지만",
+      "알려주세요. **확인하지 않은 신선함을 말하지 마세요.** \"최신으로 갱신했어요\" 는",
+      "당신이 할 수 있는 일이 아닙니다.",
       "",
       "## 사용자를 기억하는 법 — `메모리/` 폴더",
       "",
@@ -974,9 +1505,12 @@ var KMApp = (function () {
 
   function menuSetup(env, installTrigger) {
     if (!promptPassword(env)) return;
+    // ⚠️ 어떤 트리거를 거는지는 컨테이너가 정한다 (지금은 1분마다 tick).
+    //    이름을 여기서 가정하지 않는다 — 옛 컨테이너는 매일 runDaily 를 건다.
     installTrigger();
     env.ui.alert('설정 완료',
-      '매일 오전 7시에 자동으로 돌아갑니다.\n\n' +
+      '뱅크샐러드에서 내보내면 1분쯤 안에 자동으로 정리돼요.\n' +
+      '매일 오전 7시쯤에는 상태도 한 번 점검합니다.\n\n' +
       '뱅크샐러드 앱에서 데이터를 내보낼 때 방금 넣은 비밀번호를 ' +
       '「매번 똑같이」 써 주세요. 다르면 해제하지 못합니다.\n\n' +
       "'② 지금 한 번 돌리기' 로 바로 확인해 볼 수 있어요.",
@@ -1109,6 +1643,8 @@ var KMApp = (function () {
     CFG: CFG, PROP: PROP, checkSetup: checkSetup,
     STATUS_CELL: STATUS_CELL, CHECKED_CELL: CHECKED_CELL, STATUS_SHEET: STATUS_SHEET,
     process: process, runDaily: runDaily, runForced: runForced, runGuarded: runGuarded,
+    tick: tick, probeKey: probeKey, promoteLedger: promoteLedger,
+    monthRows: monthRows, monthJson: monthJson, writeMonths: writeMonths,
     findAttachment: findAttachment,
     ensureFolder: ensureFolder, findFile: findFile, putFile: putFile, putJson: putJson,
     readJson: readJson, readPrevious: readPrevious, pruneFacts: pruneFacts,

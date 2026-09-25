@@ -10,7 +10,7 @@
  * 그래서 **판단을 여기 두지 않는다.** 남는 것은 세 종류뿐이다.
  *
  *   1. Apps Script 가 **이름으로** 찾아야 하는 것
- *      onOpen(단순 트리거) · runDaily(트리거 핸들러) · menu_*(메뉴 대상)
+ *      onOpen(단순 트리거) · tick·runDaily(트리거 핸들러) · menu_*(메뉴 대상)
  *      전부 위임 한 줄이다.
  *
  *   2. **컨테이너 컨텍스트에서만 옳은 것** — env_() 가 모아 넘긴다
@@ -168,18 +168,33 @@ function onOpen() {
   }
 }
 
-/** 시간 트리거가 부르는 함수. */
+/**
+ * 1분마다 도는 트리거 핸들러. **무엇을 할지는 전부 라이브러리가 정한다** —
+ * 새 메일이 없으면 바로 끝내고, 하루 한 번 할 일도 라이브러리가 챙긴다.
+ * 그래야 일정이 바뀌어도 이 파일을 다시 복사하게 하지 않는다.
+ * 반환값에 기대지 않는다 — 모양이 바뀌면 1분마다 던지는데 여기선 못 고친다.
+ */
+function tick() {
+  app_().tick(env_());
+}
+
+/** 옛 사본의 트리거가 아직 이 이름을 부른다. 지우면 그 사람들이 조용히 멈춘다. */
 function runDaily() {
   Logger.log(app_().runDaily(env_()).message);
 }
 
-/** 매일 자동 실행을 건다. ScriptApp 은 컨테이너에 둔다 — 트리거는 이 프로젝트의 것이다. */
-function installDailyTrigger_() {
+/**
+ * 자동 실행을 건다. ScriptApp 은 컨테이너에 둔다 — 트리거는 이 프로젝트의 것이다.
+ * 옛 runDaily 트리거까지 지우고 tick 하나만 남긴다. 설정을 다시 눌러도 겹치지 않는다.
+ * 주기는 라이브러리가 넘길 수 있다(생략하면 1분) — 이 파일을 못 고치니 여지를 둔다.
+ */
+function installTrigger_(minutes) {
   var existing = ScriptApp.getProjectTriggers();
   for (var i = 0; i < existing.length; i++) {
-    if (existing[i].getHandlerFunction() === 'runDaily') ScriptApp.deleteTrigger(existing[i]);
+    var h = existing[i].getHandlerFunction();
+    if (h === 'runDaily' || h === 'tick') ScriptApp.deleteTrigger(existing[i]);
   }
-  ScriptApp.newTrigger('runDaily').timeBased().everyDays(1).atHour(7).create();
+  ScriptApp.newTrigger('tick').timeBased().everyMinutes(minutes || 1).create();
 }
 
 /**
@@ -204,7 +219,7 @@ function menu_slot2() { route_('menu_slot2'); }
 function menu_slot3() { route_('menu_slot3'); }
 
 function route_(key) {
-  withUi_(function (env) { app_().menu(env, key, installDailyTrigger_); });
+  withUi_(function (env) { app_().menu(env, key, installTrigger_); });
 }
 
 /**

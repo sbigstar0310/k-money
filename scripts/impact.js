@@ -94,7 +94,7 @@ function flatten(node, prefix, out) {
  *    `source` 는 지금 문자열이라 `/^source\./` 가 아무것도 안 잡는다. 죽은
  *    규칙은 다음 사람이 그 필드를 객체로 바꾸는 순간 조용히 발효되므로 뺐다.
  */
-const NOISE = [/^generatedFor$/, /^generatedAt$/, /^receivedOn$/, /^sourceMessageId$/,
+const NOISE = [/^generatedFor$/, /^generatedAt$/, /^receivedOn$/, /^sourceMessageId$/, /^sourceMessageDate$/,
   /^period\.(from|to)$/];
 
 /**
