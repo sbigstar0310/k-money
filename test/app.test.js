@@ -665,7 +665,12 @@ test('대화상자 문구에 마크다운을 쓰지 않는다', () => {
   const start = SRC.indexOf('var AGENT_GUIDE = [');
   const end = SRC.indexOf("].join('\\n')", start);
   assert.ok(start !== -1 && end !== -1, 'AGENT_GUIDE 블록을 못 찾았다');
-  const withoutGuide = SRC.slice(0, start) + SRC.slice(end);
+  let withoutGuide = SRC.slice(0, start) + SRC.slice(end);
+  // 옛 컨테이너용 AGENT.md 조각도 같은 마크다운 파일로 나간다.
+  const s2 = withoutGuide.indexOf('var AGENT_DAILY_SWAPS = [');
+  const e2 = withoutGuide.indexOf('\n  ];\n', s2);
+  assert.ok(s2 !== -1 && e2 !== -1, 'AGENT_DAILY_SWAPS 블록을 못 찾았다');
+  withoutGuide = withoutGuide.slice(0, s2) + withoutGuide.slice(e2);
 
   const { strings } = require('./lib/scan')(withoutGuide);
   const bad = strings.filter((l) => l.indexOf('**') !== -1);
@@ -684,9 +689,10 @@ test('AGENT.md 가 저장소 사본과 글자까지 같다', () => {
 test('AGENT.md 는 내용이 같으면 다시 쓰지 않는다', () => {
   const A = loadApp();
   const folder = fakeFolder('돈동생');
-  A.ensureAgentGuide(folder);
+  const env = fakeEnv({ containerVersion: '0.4.6' });
+  A.ensureAgentGuide(folder, env);
   const first = folder._get('AGENT.md');
-  A.ensureAgentGuide(folder);
+  A.ensureAgentGuide(folder, env);
   assert.strictEqual(folder._get('AGENT.md'), first, '매번 새로 쓰고 있다');
   assert.equal(folder._count(), 1);
 });
@@ -695,8 +701,114 @@ test('AGENT.md 가 낡았으면 갱신한다', () => {
   const A = loadApp();
   const folder = fakeFolder('돈동생');
   A.putJson(folder, 'AGENT.md', '옛날 내용');
-  A.ensureAgentGuide(folder);
+  A.ensureAgentGuide(folder, fakeEnv({ containerVersion: '0.4.6' }));
   assert.equal(folder._get('AGENT.md').getBlob().getDataAsString(), A.AGENT_GUIDE);
+});
+
+// ── 컨테이너 버전에 따라 "언제 정리되나" 를 다르게 말한다 ──────────
+//
+// 라이브러리만 올리고 옛 컨테이너(≤ 0.4.5)를 쓰는 사람은 여전히 매일 07:00
+// 한 번 돈다. 그 사람의 AI 가 "2분 안에 반영돼요" 라고 하면 거짓말이다.
+
+const PER_MINUTE = ['0.4.6', '0.4.7', '0.5.0', '1.0.0', 'v0.4.6', '0.4.6-rc1', ' 0.4.10 '];
+const DAILY = ['0.4.5', '0.1.1', '0.3.99', undefined, null, '', '알 수 없음', 'abc',
+  '0.4', '0.4.6.1', 46, {}];
+
+test('perMinute — 0.4.6 부터, 없거나 이상하면 하루 한 번으로 본다', () => {
+  const A = loadApp();
+  for (const v of PER_MINUTE) {
+    assert.equal(A.perMinute(fakeEnv({ containerVersion: v })), true, String(v));
+  }
+  for (const v of DAILY) {
+    assert.equal(A.perMinute(fakeEnv({ containerVersion: v })), false, String(v));
+  }
+  const noVersion = fakeEnv();
+  delete noVersion.containerVersion;
+  assert.equal(A.perMinute(noVersion), false);
+  assert.equal(A.perMinute(undefined), false);
+});
+
+test('AGENT.md — 옛 컨테이너 사본에는 1분·2분을 말하지 않는다', () => {
+  const A = loadApp();
+  const daily = A.AGENT_GUIDE_DAILY;
+  // 원본의 줄이 바뀌어 갈아 끼우기가 조용히 빗나가면 여기서 잡힌다.
+  assert.notEqual(daily, A.AGENT_GUIDE);
+  assert.doesNotMatch(daily, /1분마다|2분쯤|10분이 넘었는데/);
+  assert.match(daily, /하루 한 번/);
+  assert.match(daily, /아침 7시쯤/);
+  assert.match(daily, /② 지금 한 번 돌리기/);
+  assert.match(daily, /곧 반영된다고 하지 마세요/);
+  // 세 갈래 답은 그대로다 — 이미 최신 / 새 메일 있음 / 내보낸 게 없음.
+  assert.match(daily, /이미 최신입니다/);
+  assert.match(daily, /새로 내보낸 게 없어요/);
+  assert.match(daily, /`돈동생-상태\.json` 의 `message`/);
+  // 나머지는 원본과 같다. 바뀐 건 "갱신해줘" 절뿐이어야 한다.
+  const cut = (t) => t.split('## "갱신해줘" 라고 하면')[0] + t.split('Gmail 커넥터가 없으면')[1];
+  assert.equal(cut(daily), cut(A.AGENT_GUIDE));
+
+  // 1분 사본은 지금 문장 그대로.
+  assert.match(A.AGENT_GUIDE, /1분마다/);
+  assert.match(A.AGENT_GUIDE, /2분쯤 안에 반영됩니다/);
+});
+
+test('AGENT.md — 컨테이너 버전을 보고 알맞은 사본을 쓴다', () => {
+  const A = loadApp();
+  const cases = [['0.4.6', A.AGENT_GUIDE], ['0.4.5', A.AGENT_GUIDE_DAILY],
+    [undefined, A.AGENT_GUIDE_DAILY], ['뭔가 이상한 값', A.AGENT_GUIDE_DAILY]];
+  for (const [v, want] of cases) {
+    const folder = fakeFolder('돈동생');
+    A.ensureAgentGuide(folder, fakeEnv({ containerVersion: v }));
+    assert.equal(folder._get('AGENT.md').getBlob().getDataAsString(), want, String(v));
+  }
+  // 컨테이너를 새로 뜨면 다음 실행에서 1분 사본으로 바뀐다.
+  const folder = fakeFolder('돈동생');
+  A.ensureAgentGuide(folder, fakeEnv({ containerVersion: '0.4.5' }));
+  A.ensureAgentGuide(folder, fakeEnv({ containerVersion: '0.4.6' }));
+  assert.equal(folder._get('AGENT.md').getBlob().getDataAsString(), A.AGENT_GUIDE);
+  assert.equal(folder._count(), 1);
+});
+
+test('AGENT.md — 옛 컨테이너가 돌린 파이프라인도 하루 한 번 사본을 남긴다', () => {
+  // process 가 부르는 경로 전체로. 상태 쓰기(writeStatus)도 같은 자리를 쓴다.
+  const A = loadApp();
+  const env = fakeEnv({ containerVersion: '0.4.5' });
+  A.writeStatus(env, { ok: true, step: 'idle', message: '없음' });
+  const folder = env._root.getFoldersByName(A.CFG.folderName).next();
+  assert.equal(folder._get('AGENT.md').getBlob().getDataAsString(), A.AGENT_GUIDE_DAILY);
+});
+
+function setupAlert(A, containerVersion) {
+  let title = null;
+  let body = null;
+  let installed = 0;
+  const env = fakeEnv({
+    containerVersion,
+    ui: {
+      prompt: () => ({ getSelectedButton: () => 'OK', getResponseText: () => '0930' }),
+      alert(t, m) { title = t; body = m; },
+      Button: { OK: 'OK' },
+      ButtonSet: { OK: 'OK', OK_CANCEL: 'OK_CANCEL' },
+    },
+  });
+  A.menuSetup(env, () => { installed++; });
+  assert.equal(installed, 1);
+  assert.equal(title, '설정 완료');
+  return body;
+}
+
+test('menuSetup — 새 컨테이너에는 1분쯤 안에, 옛 컨테이너에는 아침 7시쯤', () => {
+  const A = loadApp();
+  const fresh = setupAlert(A, '0.4.6');
+  assert.match(fresh, /1분쯤 안에 자동으로 정리돼요/);
+  assert.match(fresh, /② 지금 한 번 돌리기/);
+
+  for (const v of ['0.4.5', undefined, '??']) {
+    const old = setupAlert(A, v);
+    assert.match(old, /매일 아침 7시쯤 자동으로 정리돼요/, String(v));
+    assert.doesNotMatch(old, /1분/, String(v));
+    assert.match(old, /매번 똑같이/, String(v));
+    assert.match(old, /② 지금 한 번 돌리기/, String(v));
+  }
 });
 
 test('AGENT.md 가 쓰기 규칙과 경계를 담는다', () => {

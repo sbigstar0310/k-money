@@ -121,7 +121,7 @@ var KMApp = (function () {
 
     var folder = ensureFolder(env.drive, CFG.folderName);
     var raw = ensureFolder(folder, CFG.rawFolderName);
-    ensureAgentGuide(folder);
+    ensureAgentGuide(folder, env);
     // 빈 폴더라도 만들어 둔다 — AI 에게 "여기 써도 된다" 는 신호다.
     ensureFolder(folder, CFG.memoryFolder);
     var stamp = Utilities.formatDate(found.date, env.tz, 'yyyy-MM-dd');
@@ -1180,19 +1180,91 @@ var KMApp = (function () {
       "`dataQuality.flags`를 확인하세요. 여기 뭔가 있으면 그걸 감안해서 답해야 합니다.",
   ].join('\n') + '\n';
 
+  // ── 옛 컨테이너(≤ 0.4.5)용 AGENT.md ─────────────────────────────
+  //
+  // ⚠️ **라이브러리만 올린 사람은 여전히 하루 한 번 돈다.** 트리거는 컨테이너가
+  //    걸고, 옛 컨테이너는 매일 07:00 runDaily 를 건다. 그런데 AGENT.md 는
+  //    라이브러리가 쓴다 — 1분짜리 문장을 그대로 내보내면 AI 가 "2분 안에
+  //    반영돼요" 라고 **거짓말을 한다.** 그래서 per-minute 원본(docs/AGENT.md.txt)
+  //    에서 그 두 군데만 갈아 끼운 사본을 옛 컨테이너에 준다.
+  //    원본에서 줄이 바뀌어 못 찾으면 test/app.test.js 가 빨간불을 켠다.
+  var AGENT_DAILY_SWAPS = [
+    [[
+      "당신도 돈동생도 뱅크샐러드에서 데이터를 끌어올 수 없어요. 돈동생은 1분마다",
+      "메일함을 보고, 내보내기 메일이 오면 2분쯤 안에 이 폴더를 새로 씁니다.",
+    ], [
+      "당신도 돈동생도 뱅크샐러드에서 데이터를 끌어올 수 없어요. 돈동생은 **하루 한 번,",
+      "아침 7시쯤** 메일함을 보고 이 폴더를 새로 씁니다. 그 사이에 온 내보내기는",
+      "다음 아침 7시까지 기다립니다 — 사용자가 시트 메뉴에서 직접 돌리지 않는 한요.",
+    ]],
+    [[
+      "- 메일이 더 나중이면 → \"HH:MM 에 온 내보내기가 있어요. 2분쯤 안에 반영됩니다\"",
+      "  (시각은 사용자 시간대로). 조금 뒤에 다시 읽으세요.",
+      "  **온 지 10분이 넘었는데도 그대로면** 처리에 실패한 겁니다. 반영된다고 하지 말고",
+      "  `돈동생-상태.json` 의 `message` 를 전하세요",
+    ], [
+      "- 메일이 더 나중이면 → \"HH:MM 에 온 내보내기가 있어요. 아침 7시쯤 정리될 때",
+      "  반영돼요. 바로 보려면 돈동생 시트 메뉴에서 ② 지금 한 번 돌리기 를 눌러 주세요\"",
+      "  (시각은 사용자 시간대로. 7시 이후에 온 메일이면 **내일** 아침입니다).",
+      "  **곧 반영된다고 하지 마세요** — 누르기 전에는 아침까지 그대로입니다.",
+      "  **그 전에 온 메일인데 7시가 지나도 그대로면** 처리에 실패한 겁니다.",
+      "  반영된다고 하지 말고 `돈동생-상태.json` 의 `message` 를 전하세요",
+    ]],
+  ];
+
+  var AGENT_GUIDE_DAILY = (function () {
+    var text = AGENT_GUIDE;
+    for (var i = 0; i < AGENT_DAILY_SWAPS.length; i++) {
+      text = text.split(AGENT_DAILY_SWAPS[i][0].join('\n'))
+        .join(AGENT_DAILY_SWAPS[i][1].join('\n'));
+    }
+    return text;
+  })();
+
+  /** 1분마다 tick 을 거는 컨테이너부터. 이 버전 이상이어야 "1분" 을 말한다. */
+  var PER_MINUTE_SINCE = '0.4.6';
+
+  /**
+   * 이 사본이 1분마다 도는가 — 컨테이너 버전으로 가른다.
+   *
+   * ⚠️ **모르면 하루 한 번으로 본다.** 버전이 없거나 깨졌을 때 "2분 안에"
+   *    라고 했다가 틀리면 AI 가 거짓말을 하고, "아침 7시쯤" 이라고 했다가
+   *    틀리면 조금 늦게 기대할 뿐이다. 틀려도 덜 해로운 쪽으로.
+   */
+  function perMinute(env) {
+    var v = semver(env && env.containerVersion);
+    var min = semver(PER_MINUTE_SINCE);
+    if (!v) return false;
+    for (var i = 0; i < 3; i++) {
+      if (v[i] !== min[i]) return v[i] > min[i];
+    }
+    return true;
+  }
+
+  /** '0.4.6' · 'v0.4.6' · '0.4.6-rc1' → [0, 4, 6]. 그 밖은 null. */
+  function semver(s) {
+    var m = /^\s*v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?\s*$/.exec(String(s == null ? '' : s));
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  }
+
+  function agentGuide(env) {
+    return perMinute(env) ? AGENT_GUIDE : AGENT_GUIDE_DAILY;
+  }
+
   /** 내용이 달라졌을 때만 쓴다. 매번 덮으면 수정시각만 흔들린다. */
-  function ensureAgentGuide(folder) {
+  function ensureAgentGuide(folder, env) {
+    var text = agentGuide(env);
     var f = findFile(folder, CFG.agentName);
     if (f) {
       try {
-        if (f.getBlob().getDataAsString('UTF-8') === AGENT_GUIDE) return;
+        if (f.getBlob().getDataAsString('UTF-8') === text) return;
       } catch (e) {
         // 못 읽으면 새로 쓴다
       }
-      f.setContent(AGENT_GUIDE);
+      f.setContent(text);
       return;
     }
-    folder.createFile(Utilities.newBlob(AGENT_GUIDE, 'text/markdown', CFG.agentName));
+    folder.createFile(Utilities.newBlob(text, 'text/markdown', CFG.agentName));
   }
 
   // ── 메모리 정리 ──────────────────────────────────────────────────
@@ -1381,7 +1453,7 @@ var KMApp = (function () {
     result.at = new Date().toISOString();
     var folder = ensureFolder(env.drive, CFG.folderName);
     // 첫 실행이 idle 이어도 안내는 있어야 한다 — 유저가 폴더를 먼저 열 수 있다.
-    ensureAgentGuide(folder);
+    ensureAgentGuide(folder, env);
     ensureFolder(folder, CFG.memoryFolder);
     // ⚠️ **정리가 실패해도 상태는 남아야 한다.** 여기서 던지면 아래
     //    putJson 과 시트 쓰기가 통째로 날아가고, runGuarded 의 catch 가
@@ -1507,10 +1579,13 @@ var KMApp = (function () {
     if (!promptPassword(env)) return;
     // ⚠️ 어떤 트리거를 거는지는 컨테이너가 정한다 (지금은 1분마다 tick).
     //    이름을 여기서 가정하지 않는다 — 옛 컨테이너는 매일 runDaily 를 건다.
+    //    그래서 "언제 정리되나" 도 컨테이너 버전을 보고 말한다 (perMinute).
     installTrigger();
     env.ui.alert('설정 완료',
-      '뱅크샐러드에서 내보내면 1분쯤 안에 자동으로 정리돼요.\n' +
-      '매일 오전 7시쯤에는 상태도 한 번 점검합니다.\n\n' +
+      (perMinute(env)
+        ? '뱅크샐러드에서 내보내면 1분쯤 안에 자동으로 정리돼요.\n' +
+          '매일 오전 7시쯤에는 상태도 한 번 점검합니다.\n\n'
+        : '뱅크샐러드에서 내보내면 매일 아침 7시쯤 자동으로 정리돼요.\n\n') +
       '뱅크샐러드 앱에서 데이터를 내보낼 때 방금 넣은 비밀번호를 ' +
       '「매번 똑같이」 써 주세요. 다르면 해제하지 못합니다.\n\n' +
       "'② 지금 한 번 돌리기' 로 바로 확인해 볼 수 있어요.",
@@ -1650,6 +1725,7 @@ var KMApp = (function () {
     readJson: readJson, readPrevious: readPrevious, pruneFacts: pruneFacts,
     dataAge: dataAge, freshnessLine: freshnessLine, isStale: isStale,
     ensureAgentGuide: ensureAgentGuide, AGENT_GUIDE: AGENT_GUIDE,
+    AGENT_GUIDE_DAILY: AGENT_GUIDE_DAILY, agentGuide: agentGuide, perMinute: perMinute,
     memoTopic: memoTopic, topicKey: topicKey, pruneMemory: pruneMemory,
     markMemorySeen: markMemorySeen,
     writeStatus: writeStatus, writeStatusToSheet: writeStatusToSheet,

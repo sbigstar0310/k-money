@@ -400,7 +400,8 @@ function world(opts) {
     ss: { getSheetByName: () => sheetTab, getSheets: () => [sheetTab] },
     ui: null,
     tz: 'Asia/Seoul',
-    containerVersion: '0.1.1',
+    // tick 을 거는 건 0.4.6 부터다 — 그보다 옛 컨테이너는 tick 을 안 부른다.
+    containerVersion: '0.4.6',
     now: () => w.now,
   };
 
